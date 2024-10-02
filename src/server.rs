@@ -1,16 +1,25 @@
-use crate::gen::validator::{
-    validator_service_server::ValidatorService, AckBundles, AckBundlesTag, ConnectBlockRequest,
-    ConnectBlockResponse, Ctip, Deposit, DisconnectBlockRequest, DisconnectBlockResponse,
-    GetCoinbasePsbtRequest, GetCoinbasePsbtResponse, GetCtipRequest, GetCtipResponse,
-    GetDepositsRequest, GetDepositsResponse, GetMainBlockHeightRequest, GetMainBlockHeightResponse,
-    GetMainChainTipRequest, GetMainChainTipResponse, GetSidechainProposalsRequest,
-    GetSidechainProposalsResponse, GetSidechainsRequest, GetSidechainsResponse, Sidechain,
-    SidechainProposal,
+use crate::proto::{
+    self,
+    mainchain::{
+        get_ctip_response::Ctip, get_sidechain_proposals_response::SidechainProposal,
+        get_sidechains_response::SidechainInfo, server::MainchainService,
+        BroadcastWithdrawalBundleRequest, BroadcastWithdrawalBundleResponse,
+        CreateBmmCriticalDataTransactionRequest, CreateBmmCriticalDataTransactionResponse,
+        CreateDepositTransactionRequest, CreateDepositTransactionResponse, CreateNewAddressRequest,
+        CreateNewAddressResponse, GenerateBlocksRequest, GenerateBlocksResponse,
+        GetBlockHeaderInfoRequest, GetBlockHeaderInfoResponse, GetBlockInfoRequest,
+        GetBlockInfoResponse, GetBmmHStarCommitmentsRequest, GetBmmHStarCommitmentsResponse,
+        GetChainInfoRequest, GetChainInfoResponse, GetChainTipRequest, GetChainTipResponse,
+        GetCoinbasePsbtRequest, GetCoinbasePsbtResponse, GetCtipRequest, GetCtipResponse,
+        GetSidechainProposalsRequest, GetSidechainProposalsResponse, GetSidechainsRequest,
+        GetSidechainsResponse, GetTwoWayPegDataRequest, GetTwoWayPegDataResponse,
+        SubscribeEventsRequest, SubscribeEventsResponse,
+    },
 };
 
 use bip300301_messages::{
-    bitcoin::{self, absolute::Height, consensus::Encodable, hashes::Hash, Transaction, TxOut},
-    CoinbaseMessage, M4AckBundles,
+    bitcoin::{self, absolute::Height, hashes::Hash, Transaction, TxOut},
+    CoinbaseMessage,
 };
 use miette::Result;
 use tonic::{Request, Response, Status};
@@ -18,44 +27,102 @@ use tonic::{Request, Response, Status};
 pub use crate::bip300::Bip300;
 use crate::types;
 
-fn invalid_enum_variant<Message>(field_name: &str, variant_name: &str) -> tonic::Status
+fn invalid_field_value<Message>(field_name: &str, value: &str) -> tonic::Status
 where
     Message: prost::Name,
 {
-    let err_msg = format!(
-        "Invalid enum variant in field `{}` of message `{}`: `{}`",
-        field_name,
-        Message::full_name(),
-        variant_name
-    );
-    tonic::Status::invalid_argument(err_msg)
+    let err = proto::Error::invalid_field_value::<Message>(field_name, value);
+    tonic::Status::invalid_argument(err.to_string())
+}
+
+fn missing_field<Message>(field_name: &str) -> tonic::Status
+where
+    Message: prost::Name,
+{
+    let err = proto::Error::missing_field::<Message>(field_name);
+    tonic::Status::invalid_argument(err.to_string())
 }
 
 #[tonic::async_trait]
-impl ValidatorService for Bip300 {
-    async fn connect_block(
+impl MainchainService for Bip300 {
+    async fn broadcast_withdrawal_bundle(
         &self,
-        _: Request<ConnectBlockRequest>,
-    ) -> Result<Response<ConnectBlockResponse>, Status> {
-        todo!();
-        /*
-        // println!("REQUEST = {:?}", request);
-        let request = request.into_inner();
-        let mut cursor = Cursor::new(request.block);
-        let block = Block::consensus_decode(&mut cursor).unwrap();
-        let txn = self.env.write_txn().unwrap();
-        self.connect_block(&block, request.height).unwrap();
-        let response = ConnectBlockResponse {};
-        Ok(Response::new(response))
-        */
+        _request: tonic::Request<BroadcastWithdrawalBundleRequest>,
+    ) -> Result<tonic::Response<BroadcastWithdrawalBundleResponse>, tonic::Status> {
+        // FIXME: implement
+        todo!()
     }
 
-    async fn disconnect_block(
+    async fn create_bmm_critical_data_transaction(
         &self,
-        _request: Request<DisconnectBlockRequest>,
-    ) -> Result<Response<DisconnectBlockResponse>, Status> {
-        let response = DisconnectBlockResponse {};
-        Ok(Response::new(response))
+        _request: tonic::Request<CreateBmmCriticalDataTransactionRequest>,
+    ) -> Result<tonic::Response<CreateBmmCriticalDataTransactionResponse>, tonic::Status> {
+        // FIXME: implement
+        todo!()
+    }
+
+    async fn create_deposit_transaction(
+        &self,
+        _request: tonic::Request<CreateDepositTransactionRequest>,
+    ) -> Result<tonic::Response<CreateDepositTransactionResponse>, tonic::Status> {
+        // FIXME: implement
+        todo!()
+    }
+
+    async fn create_new_address(
+        &self,
+        _request: tonic::Request<CreateNewAddressRequest>,
+    ) -> std::result::Result<tonic::Response<CreateNewAddressResponse>, tonic::Status> {
+        // FIXME: implement
+        todo!()
+    }
+
+    /// Regtest only
+    async fn generate_blocks(
+        &self,
+        _request: tonic::Request<GenerateBlocksRequest>,
+    ) -> Result<tonic::Response<GenerateBlocksResponse>, tonic::Status> {
+        // FIXME: implement
+        todo!()
+    }
+    async fn get_block_header_info(
+        &self,
+        _request: tonic::Request<GetBlockHeaderInfoRequest>,
+    ) -> Result<tonic::Response<GetBlockHeaderInfoResponse>, tonic::Status> {
+        // FIXME: implement
+        todo!()
+    }
+
+    async fn get_block_info(
+        &self,
+        _request: tonic::Request<GetBlockInfoRequest>,
+    ) -> Result<tonic::Response<GetBlockInfoResponse>, tonic::Status> {
+        // FIXME: implement
+        todo!()
+    }
+
+    async fn get_bmm_h_star_commitments(
+        &self,
+        _request: tonic::Request<GetBmmHStarCommitmentsRequest>,
+    ) -> Result<tonic::Response<GetBmmHStarCommitmentsResponse>, tonic::Status> {
+        // FIXME: implement
+        todo!()
+    }
+
+    async fn get_chain_info(
+        &self,
+        _request: tonic::Request<GetChainInfoRequest>,
+    ) -> Result<tonic::Response<GetChainInfoResponse>, tonic::Status> {
+        // FIXME: implement
+        todo!()
+    }
+
+    async fn get_chain_tip(
+        &self,
+        _request: tonic::Request<GetChainTipRequest>,
+    ) -> Result<tonic::Response<GetChainTipResponse>, tonic::Status> {
+        // FIXME: implement
+        todo!()
     }
 
     async fn get_coinbase_psbt(
@@ -63,72 +130,34 @@ impl ValidatorService for Bip300 {
         request: Request<GetCoinbasePsbtRequest>,
     ) -> Result<Response<GetCoinbasePsbtResponse>, Status> {
         let request = request.into_inner();
-        let mut messages = vec![];
-        for propose_sidechain in &request.propose_sidechains {
-            let sidechain_number = propose_sidechain.sidechain_number as u8;
-            let data = propose_sidechain.data.clone();
-            let message = CoinbaseMessage::M1ProposeSidechain {
-                sidechain_number,
-                data,
-            };
+        let mut messages = Vec::<CoinbaseMessage>::new();
+        for propose_sidechain in request.propose_sidechains {
+            let message = propose_sidechain
+                .try_into()
+                .map_err(|err: proto::Error| tonic::Status::invalid_argument(err.to_string()))?;
             messages.push(message);
         }
-        for ack_sidechain in &request.ack_sidechains {
-            let sidechain_number = ack_sidechain.sidechain_number as u8;
-            let data_hash: &[u8; 32] = ack_sidechain.data_hash.as_slice().try_into().unwrap();
-            let message = CoinbaseMessage::M2AckSidechain {
-                sidechain_number,
-                data_hash: *data_hash,
-            };
+        for ack_sidechain in request.ack_sidechains {
+            let message = ack_sidechain
+                .try_into()
+                .map_err(|err: proto::Error| tonic::Status::invalid_argument(err.to_string()))?;
             messages.push(message);
         }
-        for propose_bundle in &request.propose_bundles {
-            let sidechain_number = propose_bundle.sidechain_number as u8;
-            let bundle_txid: &[u8; 32] = &propose_bundle.bundle_txid.as_slice().try_into().unwrap();
-            let message = CoinbaseMessage::M3ProposeBundle {
-                sidechain_number,
-                bundle_txid: *bundle_txid,
-            };
+        for propose_bundle in request.propose_bundles {
+            let message = propose_bundle
+                .try_into()
+                .map_err(|err: proto::Error| tonic::Status::invalid_argument(err.to_string()))?;
             messages.push(message);
         }
-        if let Some(ack_bundles) = &request.ack_bundles {
-            let message = match ack_bundles.tag() {
-                AckBundlesTag::Unspecified => {
-                    return Err(invalid_enum_variant::<AckBundles>("tag", "Unspecified"))
-                }
-                AckBundlesTag::RepeatPrevious => M4AckBundles::RepeatPrevious,
-                AckBundlesTag::LeadingBy50 => M4AckBundles::LeadingBy50,
-                AckBundlesTag::Upvotes => {
-                    let mut two_bytes = false;
-                    for upvote in &ack_bundles.upvotes {
-                        if *upvote > u8::MAX as u32 {
-                            two_bytes = true;
-                        }
-                        if *upvote > u16::MAX as u32 {
-                            panic!("upvote too large");
-                        }
-                    }
-                    if two_bytes {
-                        let upvotes = ack_bundles
-                            .upvotes
-                            .iter()
-                            .map(|upvote| (*upvote).try_into().unwrap())
-                            .collect();
-                        M4AckBundles::TwoBytes { upvotes }
-                    } else {
-                        let upvotes = ack_bundles
-                            .upvotes
-                            .iter()
-                            .map(|upvote| (*upvote).try_into().unwrap())
-                            .collect();
-                        M4AckBundles::OneByte { upvotes }
-                    }
-                }
-            };
-            let message = CoinbaseMessage::M4AckBundles(message);
+        let ack_bundles = request
+            .ack_bundles
+            .ok_or_else(|| missing_field::<GetCoinbasePsbtRequest>("ack_bundles"))?;
+        {
+            let message = ack_bundles
+                .try_into()
+                .map_err(|err: proto::Error| tonic::Status::invalid_argument(err.to_string()))?;
             messages.push(message);
         }
-
         let output = messages
             .into_iter()
             .map(|message| TxOut {
@@ -142,13 +171,51 @@ impl ValidatorService for Bip300 {
             lock_time: bitcoin::absolute::LockTime::Blocks(Height::ZERO),
             version: 2,
         };
-        let mut psbt = vec![];
-        transasction.consensus_encode(&mut psbt).unwrap();
-
+        let psbt = bitcoin::consensus::serialize(&transasction);
         let response = GetCoinbasePsbtResponse { psbt };
         Ok(Response::new(response))
     }
 
+    async fn get_ctip(
+        &self,
+        request: tonic::Request<GetCtipRequest>,
+    ) -> Result<tonic::Response<GetCtipResponse>, tonic::Status> {
+        let GetCtipRequest { sidechain_number } = request.into_inner();
+        let sidechain_number: u8 = {
+            let sidechain_number: u32 = sidechain_number
+                .ok_or_else(|| missing_field::<GetCtipRequest>("sidechain_number"))?;
+            sidechain_number.try_into().map_err(|_| {
+                invalid_field_value::<GetCtipRequest>(
+                    "sidechain_number",
+                    &sidechain_number.to_string(),
+                )
+            })?
+        };
+        let ctip = self
+            .get_ctip(sidechain_number)
+            .map_err(|err| tonic::Status::internal(err.to_string()))?;
+        if let Some(ctip) = ctip {
+            let sequence_number = self
+                .get_ctip_sequence_number(sidechain_number)
+                .map_err(|err| tonic::Status::internal(err.to_string()))?;
+            // get_ctip returned Some(ctip) above, so we know that the sequence_number will also
+            // return Some, so we just unwrap it.
+            let sequence_number = sequence_number.unwrap();
+            let ctip = Ctip {
+                txid: ctip.outpoint.txid.as_byte_array().into(),
+                vout: ctip.outpoint.vout,
+                value: ctip.value,
+                sequence_number,
+            };
+            let response = GetCtipResponse { ctip: Some(ctip) };
+            Ok(Response::new(response))
+        } else {
+            let response = GetCtipResponse { ctip: None };
+            Ok(Response::new(response))
+        }
+    }
+
+    /*
     async fn get_deposits(
         &self,
         request: Request<GetDepositsRequest>,
@@ -167,13 +234,16 @@ impl ValidatorService for Bip300 {
         }
         Ok(Response::new(response))
     }
+    */
 
     async fn get_sidechain_proposals(
         &self,
-        _request: tonic::Request<GetSidechainProposalsRequest>,
-    ) -> std::result::Result<tonic::Response<GetSidechainProposalsResponse>, tonic::Status> {
-        let sidechain_proposals = self.get_sidechain_proposals().unwrap();
-
+        request: tonic::Request<GetSidechainProposalsRequest>,
+    ) -> Result<tonic::Response<GetSidechainProposalsResponse>, tonic::Status> {
+        let GetSidechainProposalsRequest {} = request.into_inner();
+        let sidechain_proposals = self
+            .get_sidechain_proposals()
+            .map_err(|err| tonic::Status::internal(err.to_string()))?;
         let sidechain_proposals = sidechain_proposals
             .into_iter()
             .map(
@@ -205,64 +275,100 @@ impl ValidatorService for Bip300 {
 
     async fn get_sidechains(
         &self,
-        _request: tonic::Request<GetSidechainsRequest>,
-    ) -> std::result::Result<tonic::Response<GetSidechainsResponse>, tonic::Status> {
-        let sidechains = self.get_sidechains().unwrap();
-
+        request: tonic::Request<GetSidechainsRequest>,
+    ) -> Result<tonic::Response<GetSidechainsResponse>, tonic::Status> {
+        let GetSidechainsRequest {} = request.into_inner();
+        let sidechains = self
+            .get_sidechains()
+            .map_err(|err| tonic::Status::internal(err.to_string()))?;
         let sidechains = sidechains
             .into_iter()
-            .map(
-                |types::Sidechain {
-                     sidechain_number,
-                     data,
-                     vote_count,
-                     proposal_height,
-                     activation_height,
-                 }| {
-                    Sidechain {
-                        sidechain_number: sidechain_number as u32,
-                        data,
-                        vote_count: vote_count as u32,
-                        proposal_height,
-                        activation_height,
-                    }
-                },
-            )
+            .map(|sidechain| {
+                let types::Sidechain {
+                    sidechain_number,
+                    data,
+                    vote_count,
+                    proposal_height,
+                    activation_height,
+                } = sidechain;
+                SidechainInfo {
+                    sidechain_number: sidechain_number as u32,
+                    data,
+                    vote_count: vote_count as u32,
+                    proposal_height,
+                    activation_height,
+                }
+            })
             .collect();
         let response = GetSidechainsResponse { sidechains };
         Ok(Response::new(response))
     }
 
-    async fn get_ctip(
+    async fn get_two_way_peg_data(
         &self,
-        request: tonic::Request<GetCtipRequest>,
-    ) -> std::result::Result<tonic::Response<GetCtipResponse>, tonic::Status> {
-        let sidechain_number = match request.into_inner().sidechain_number {
-            Some(sidechain_number) => sidechain_number as u8,
-            None => return Err(Status::invalid_argument("must provide sidechain number")),
+        request: tonic::Request<GetTwoWayPegDataRequest>,
+    ) -> Result<tonic::Response<GetTwoWayPegDataResponse>, tonic::Status> {
+        let GetTwoWayPegDataRequest {
+            sidechain_id,
+            start_block_hash,
+            end_block_hash,
+        } = request.into_inner();
+        let _sidechain_id: u8 = {
+            let sidechain_id: u32 = sidechain_id
+                .ok_or_else(|| missing_field::<GetTwoWayPegDataRequest>("sidechain_id"))?;
+            sidechain_id.try_into().map_err(|_| {
+                invalid_field_value::<GetTwoWayPegDataRequest>(
+                    "sidechain_id",
+                    &sidechain_id.to_string(),
+                )
+            })?
         };
-
-        if let Some(ctip) = self.get_ctip(sidechain_number).unwrap() {
-            let sequence_number = self.get_ctip_sequence_number(sidechain_number).unwrap();
-            // get_ctip returned Some(ctip) above, so we know that the sequence_number will also
-            // return Some, so we just unwrap it.
-            let sequence_number = sequence_number.unwrap();
-            let ctip = Ctip {
-                txid: ctip.outpoint.txid.as_byte_array().into(),
-                vout: ctip.outpoint.vout,
-                value: ctip.value,
-                sequence_number,
-            };
-            let response = GetCtipResponse { ctip: Some(ctip) };
-            Ok(Response::new(response))
-        } else {
-            Err(Status::not_found(format!(
-                "no chain tip found for sidechain number {}",
-                sidechain_number
-            )))
-        }
+        let _start_block_hash: Option<[u8; 32]> = start_block_hash
+            .map(|start_block_hash| {
+                start_block_hash.try_into().map_err(|start_block_hash| {
+                    invalid_field_value::<GetTwoWayPegDataRequest>(
+                        "start_block_hash",
+                        &hex::encode(start_block_hash),
+                    )
+                })
+            })
+            .transpose()?;
+        let _end_block_hash: [u8; 32] = end_block_hash
+            .ok_or_else(|| missing_field::<GetTwoWayPegDataRequest>("end_block_hash"))?
+            .try_into()
+            .map_err(|end_block_hash| {
+                invalid_field_value::<GetTwoWayPegDataRequest>(
+                    "end_block_hash",
+                    &hex::encode(end_block_hash),
+                )
+            })?;
+        // FIXME: implement
+        todo!()
     }
 
+    type SubscribeEventsStream =
+        futures::channel::mpsc::UnboundedReceiver<Result<SubscribeEventsResponse, tonic::Status>>;
+
+    async fn subscribe_events(
+        &self,
+        request: tonic::Request<SubscribeEventsRequest>,
+    ) -> Result<tonic::Response<Self::SubscribeEventsStream>, tonic::Status> {
+        let SubscribeEventsRequest { sidechain_id } = request.into_inner();
+        let _sidechain_id: u8 = {
+            let sidechain_id: u32 = sidechain_id
+                .ok_or_else(|| missing_field::<GetTwoWayPegDataRequest>("sidechain_id"))?;
+            sidechain_id.try_into().map_err(|_| {
+                invalid_field_value::<GetTwoWayPegDataRequest>(
+                    "sidechain_id",
+                    &sidechain_id.to_string(),
+                )
+            })?
+        };
+        // FIXME: implement
+        todo!()
+    }
+
+    /*
     async fn get_main_block_height(
         &self,
         _request: tonic::Request<GetMainBlockHeightRequest>,
@@ -282,6 +388,7 @@ impl ValidatorService for Bip300 {
         };
         Ok(Response::new(response))
     }
+    */
 
     // This is commented out for now, because it references Protobuf messages that
     // does not exist.

@@ -16,24 +16,6 @@ jobs:
     #  RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v4
-      
-      - name: run protolint
-        uses: plexsystems/protolint-action@v0.7.0
-        with:
-          configDirectory: .
-          srcDirectory: proto
-
-      - name: Install buf
-        uses: bufbuild/buf-action@v1
-        with:
-          setup_only: true
-      
-      # Disabled, since buf format is not configurable
-      #- name: Buf format
-      #  run: buf format -d --exit-code
-      
-      - name: Buf lint
-        run: buf lint --error-format github-actions
 
       - name: Install latest stable toolchain
         uses: dtolnay/rust-toolchain@master

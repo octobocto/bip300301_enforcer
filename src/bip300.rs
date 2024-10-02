@@ -21,9 +21,7 @@ use tokio_stream::wrappers::IntervalStream;
 use ureq_jsonrpc::{json, Client};
 
 use crate::cli::Config;
-use crate::types::{
-    Ctip, Deposit, Hash256, PendingM6id, Sidechain, SidechainProposal, TreasuryUtxo,
-};
+use crate::types::{Ctip, Hash256, PendingM6id, Sidechain, SidechainProposal, TreasuryUtxo};
 
 /*
 const WITHDRAWAL_BUNDLE_MAX_AGE: u16 = 26_300;
@@ -830,6 +828,7 @@ impl Bip300 {
         Ok(ctip)
     }
 
+    /*
     pub fn get_main_block_height(&self) -> Result<u32> {
         let txn = self.env.read_txn().into_diagnostic()?;
         let height = self
@@ -872,6 +871,7 @@ impl Bip300 {
         }
         Ok(deposits)
     }
+    */
 
     /*
     pub fn get_accepted_bmm_hashes(&self) -> Result<Vec<(u32, Vec<[u8; 32]>)>> {

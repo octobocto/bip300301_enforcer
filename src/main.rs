@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::Path};
 
 mod bip300;
 mod cli;
-mod gen;
+mod proto;
 mod server;
 mod types;
 
@@ -11,8 +11,8 @@ use futures::{
     future::{self, Either},
     FutureExt, TryFutureExt,
 };
-use gen::validator::validator_service_server::ValidatorServiceServer;
 use miette::{miette, IntoDiagnostic, Result};
+use proto::mainchain;
 use server::Bip300;
 use tonic::transport::Server;
 use ureq_jsonrpc::Client;
@@ -40,7 +40,7 @@ fn _create_client(main_datadir: &Path) -> Result<Client> {
 async fn run_server(bip300: Bip300, addr: SocketAddr) -> Result<()> {
     println!("Listening for gRPC on {addr}");
     Server::builder()
-        .add_service(ValidatorServiceServer::new(bip300))
+        .add_service(mainchain::Server::new(bip300))
         .serve(addr)
         .map(|res| res.into_diagnostic())
         .await

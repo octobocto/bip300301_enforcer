@@ -8,6 +8,8 @@
 Building/running:
 
 ```bash
+# Check out git submodules
+$ git submodule update --init --recursive
 # Compiles the project
 $ cargo build
 

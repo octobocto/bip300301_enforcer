@@ -3,8 +3,8 @@ use std::{env, fs, path::PathBuf};
 use prost::Message;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let protos: &[&str] = &["proto/validator/v1/validator.proto"];
-    let includes: &[&str] = &["proto/validator/v1"];
+    let protos: &[&str] = &["proto/proto/cusf/mainchain/v1/mainchain.proto"];
+    let includes: &[&str] = &["proto/proto/cusf/mainchain/v1"];
     let file_descriptors = protox::compile(protos, includes)?;
     let file_descriptor_path =
         PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR environment variable not set"))
