@@ -18,7 +18,7 @@ byteorder = "1.5.0"
 clap = { version = "4.5.18", features = ["derive"] }
 fallible-iterator = "0.3.0"
 futures = "0.3.30"
-heed = { git = "https://github.com/meilisearch/heed", tag = "v0.12.4", version = "0.12.4" }
+heed = "0.20.5"
 hex = "0.4.3"
 miette = { version = "7.1.0", features = ["fancy"] }
 nom = "7.1.3"
@@ -30,6 +30,11 @@ tokio = { version = "1.36.0", features = ["rt-multi-thread", "macros"] }
 tokio-stream = "0.1.15"
 tonic = "0.12.3"
 ureq-jsonrpc = { git = "https://github.com/nchashch/ureq-jsonrpc" }
+
+[dependencies.educe]
+version = "0.6.0"
+default-features = false
+features = ["Clone", "Debug"]
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }

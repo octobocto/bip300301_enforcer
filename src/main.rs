@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
     let cli = cli::Config::parse();
     let serve_rpc_addr = cli.serve_rpc_addr;
 
-    let bip300 = Bip300::new(Path::new("./"))?;
+    let bip300 = Bip300::new(Path::new("./")).into_diagnostic()?;
 
     let task = bip300
         .run(cli)

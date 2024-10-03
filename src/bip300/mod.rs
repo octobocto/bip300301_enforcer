@@ -1,27 +1,41 @@
-use std::collections::{HashMap, HashSet};
-use std::{io::Cursor, path::Path, str::FromStr, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    io::Cursor,
+    path::Path,
+    str::FromStr,
+    time::Duration,
+};
 
-use bip300301_messages::bitcoin::hashes::Hash;
 use bip300301_messages::{
-    bitcoin, m6_to_id, parse_coinbase_script, parse_m8_bmm_request, parse_op_drivechain, sha256d,
+    bitcoin::{self, hashes::Hash as _},
+    m6_to_id, parse_coinbase_script, parse_m8_bmm_request, parse_op_drivechain, sha256d,
     CoinbaseMessage, M4AckBundles, ABSTAIN_TWO_BYTES, ALARM_TWO_BYTES,
 };
 use bitcoin::{
     consensus::Decodable, opcodes::all::OP_RETURN, Block, BlockHash, OutPoint, Transaction,
 };
-use fallible_iterator::{FallibleIterator, IteratorExt as _};
+use fallible_iterator::FallibleIterator;
 use futures::{StreamExt, TryFutureExt, TryStreamExt};
-use heed::{types::SerdeBincode, Env, EnvOpenOptions};
-use heed::{Database, RoTxn, RwTxn};
-use miette::{miette, IntoDiagnostic, Result};
-use serde::{Deserialize, Serialize};
-use tokio::task::JoinHandle;
-use tokio::time::{interval, Instant};
+use miette::{miette, IntoDiagnostic};
+use thiserror::Error;
+use tokio::{
+    task::JoinHandle,
+    time::{interval, Instant},
+};
 use tokio_stream::wrappers::IntervalStream;
 use ureq_jsonrpc::{json, Client};
 
-use crate::cli::Config;
-use crate::types::{Ctip, Hash256, PendingM6id, Sidechain, SidechainProposal, TreasuryUtxo};
+use crate::{
+    cli::Config,
+    types::{Ctip, Hash256, PendingM6id, Sidechain, SidechainProposal, TreasuryUtxo},
+};
+
+mod dbs;
+
+use dbs::{
+    CommitWriteTxnError, CreateDbsError, DbDeleteError, DbFirstError, DbGetError, DbIterError,
+    DbLenError, DbPutError, Dbs, RwTxn, UnitKey, WriteTxnError,
+};
 
 /*
 const WITHDRAWAL_BUNDLE_MAX_AGE: u16 = 26_300;
@@ -46,109 +60,161 @@ const UNUSED_SIDECHAIN_SLOT_ACTIVATION_MAX_FAILS: u16 = 5;
 const UNUSED_SIDECHAIN_SLOT_ACTIVATION_THRESHOLD: u16 =
     UNUSED_SIDECHAIN_SLOT_PROPOSAL_MAX_AGE - UNUSED_SIDECHAIN_SLOT_ACTIVATION_MAX_FAILS;
 
-/// Unit key. LMDB can't use zero-sized keys, so this encodes to a single byte
-#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub struct UnitKey;
-
-impl<'de> Deserialize<'de> for UnitKey {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        // Deserialize any byte (ignoring it) and return UnitKey
-        let _ = u8::deserialize(deserializer)?;
-        Ok(UnitKey)
-    }
+#[derive(Debug, Error)]
+enum HandleM1ProposeSidechainError {
+    #[error(transparent)]
+    DbGet(#[from] DbGetError),
+    #[error(transparent)]
+    DbPut(#[from] DbPutError),
 }
 
-impl Serialize for UnitKey {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        // Always serialize to the same arbitrary byte
-        serializer.serialize_u8(0x69)
-    }
+#[derive(Debug, Error)]
+enum HandleM2AckSidechainError {
+    #[error(transparent)]
+    DbDelete(#[from] DbDeleteError),
+    #[error(transparent)]
+    DbGet(#[from] DbGetError),
+    #[error(transparent)]
+    DbPut(#[from] DbPutError),
+}
+
+#[derive(Debug, Error)]
+enum HandleFailedSidechainProposalsError {
+    #[error(transparent)]
+    DbDelete(#[from] DbDeleteError),
+    #[error(transparent)]
+    DbIter(#[from] DbIterError),
+    #[error(transparent)]
+    DbGet(#[from] DbGetError),
+}
+
+#[derive(Debug, Error)]
+enum HandleM3ProposeBundleError {
+    #[error(transparent)]
+    DbGet(#[from] DbGetError),
+    #[error(transparent)]
+    DbPut(#[from] DbPutError),
+    #[error("Cannot propose bundle; sidechain slot {sidechain_number} is inactive")]
+    InactiveSidechain { sidechain_number: u8 },
+}
+
+#[derive(Debug, Error)]
+enum HandleM4VotesError {
+    #[error(transparent)]
+    DbGet(#[from] DbGetError),
+    #[error(transparent)]
+    DbPut(#[from] DbPutError),
+}
+
+#[derive(Debug, Error)]
+enum HandleM4AckBundlesError {
+    #[error("Error handling M4 Votes")]
+    Votes(#[from] HandleM4VotesError),
+}
+
+#[derive(Debug, Error)]
+enum HandleFailedM6IdsError {
+    #[error(transparent)]
+    DbIter(#[from] DbIterError),
+    #[error(transparent)]
+    DbPut(#[from] DbPutError),
+}
+
+#[derive(Debug, Error)]
+enum HandleM5M6Error {
+    #[error(transparent)]
+    DbGet(#[from] DbGetError),
+    #[error(transparent)]
+    DbPut(#[from] DbPutError),
+    #[error("Invalid M6")]
+    InvalidM6,
+    #[error("Old Ctip for sidechain {sidechain_number} is unspent")]
+    OldCtipUnspent { sidechain_number: u8 },
+}
+
+#[derive(Debug, Error)]
+enum HandleM8Error {
+    #[error("BMM request expired")]
+    BmmRequestExpired,
+    #[error("Cannot include BMM request; not accepted by miners")]
+    NotAcceptedByMiners,
+}
+
+#[derive(Debug, Error)]
+enum ConnectBlockError {
+    #[error(transparent)]
+    DbDelete(#[from] DbDeleteError),
+    #[error(transparent)]
+    DbFirst(#[from] DbFirstError),
+    #[error(transparent)]
+    DbLen(#[from] DbLenError),
+    #[error(transparent)]
+    DbPut(#[from] DbPutError),
+    #[error("Error handling failed M6IDs")]
+    FailedM6Ids(#[from] HandleFailedM6IdsError),
+    #[error("Error handling failed sidechain proposals")]
+    FailedSidechainProposals(#[from] HandleFailedSidechainProposalsError),
+    #[error("Error handling M1 (propose sidechain)")]
+    M1ProposeSidechain(#[from] HandleM1ProposeSidechainError),
+    #[error("Error handling M2 (ack sidechain)")]
+    M2AckSidechain(#[from] HandleM2AckSidechainError),
+    #[error("Error handling M3 (propose bundle)")]
+    M3ProposeBundle(#[from] HandleM3ProposeBundleError),
+    #[error("Error handling M4 (ack bundles)")]
+    M4AckBundles(#[from] HandleM4AckBundlesError),
+    #[error("Error handling M5/M6")]
+    M5M6(#[from] HandleM5M6Error),
+    #[error("Error handling M8")]
+    M8(#[from] HandleM8Error),
+    #[error("Multiple blocks BMM'd in sidechain slot {sidechain_number}")]
+    MultipleBmmBlocks { sidechain_number: u8 },
+}
+
+#[derive(Debug, Error)]
+enum DisconnectBlockError {}
+
+#[derive(Debug, Error)]
+enum TxValidationError {}
+
+#[derive(Debug, Error)]
+enum InitialSyncError {
+    #[error(transparent)]
+    CommitWriteTxn(#[from] CommitWriteTxnError),
+    #[error("Failed to connect block")]
+    ConnectBlock(#[from] ConnectBlockError),
+    #[error(transparent)]
+    DbGet(#[from] DbGetError),
+    #[error(transparent)]
+    DbPut(#[from] DbPutError),
+    #[error("Failed to decode block hash hex: `{block_hash_hex}`")]
+    DecodeBlockHashHex {
+        block_hash_hex: String,
+        source: hex::FromHexError,
+    },
+    #[error("Failed to get block `{block_hash}`")]
+    GetBlock { block_hash: String },
+    #[error("Failed to get block count")]
+    GetBlockCount,
+    #[error("Failed to get block hash for height `{height}`")]
+    GetBlockHash { height: u32 },
+    #[error("RPC error: `{method}`")]
+    Rpc {
+        method: String,
+        source: ureq_jsonrpc::Error,
+    },
+    #[error(transparent)]
+    WriteTxn(#[from] WriteTxnError),
 }
 
 #[derive(Clone)]
 pub struct Bip300 {
-    env: Env,
-
-    data_hash_to_sidechain_proposal:
-        Database<SerdeBincode<Hash256>, SerdeBincode<SidechainProposal>>,
-    sidechain_number_to_pending_m6ids: Database<SerdeBincode<u8>, SerdeBincode<Vec<PendingM6id>>>,
-    sidechain_number_to_sidechain: Database<SerdeBincode<u8>, SerdeBincode<Sidechain>>,
-    sidechain_number_to_ctip: Database<SerdeBincode<u8>, SerdeBincode<Ctip>>,
-    _previous_votes: Database<SerdeBincode<UnitKey>, SerdeBincode<Vec<Hash256>>>,
-    _leading_by_50: Database<SerdeBincode<UnitKey>, SerdeBincode<Vec<Hash256>>>,
-    current_block_height: Database<SerdeBincode<UnitKey>, SerdeBincode<u32>>,
-    current_chain_tip: Database<SerdeBincode<UnitKey>, SerdeBincode<Hash256>>,
-    sidechain_number_sequence_number_to_treasury_utxo:
-        Database<SerdeBincode<(u8, u64)>, SerdeBincode<TreasuryUtxo>>,
-    sidechain_number_to_treasury_utxo_count: Database<SerdeBincode<u8>, SerdeBincode<u64>>,
-    block_height_to_accepted_bmm_block_hashes:
-        Database<SerdeBincode<u32>, SerdeBincode<Vec<Hash256>>>,
+    dbs: Dbs,
 }
 
 impl Bip300 {
-    const NUM_DBS: u32 = 11;
-
-    pub fn new(datadir: &Path) -> Result<Self> {
-        let db_dir = datadir.join("./bip300301_enforcer.mdb");
-        std::fs::create_dir_all(&db_dir).into_diagnostic()?;
-        let env = EnvOpenOptions::new()
-            .max_dbs(Self::NUM_DBS)
-            .open(db_dir)
-            .into_diagnostic()?;
-        let data_hash_to_sidechain_proposal = env
-            .create_database(Some("data_hash_to_sidechain_proposal"))
-            .into_diagnostic()?;
-        let sidechain_number_to_pending_m6ids = env
-            .create_database(Some("sidechain_number_to_pending_m6ids"))
-            .into_diagnostic()?;
-        let sidechain_number_to_sidechain = env
-            .create_database(Some("sidechain_number_to_sidechain"))
-            .into_diagnostic()?;
-        let sidechain_number_to_ctip = env
-            .create_database(Some("sidechain_number_to_ctip"))
-            .into_diagnostic()?;
-        let previous_votes = env
-            .create_database(Some("previous_votes"))
-            .into_diagnostic()?;
-        let leading_by_50 = env
-            .create_database(Some("leading_by_50"))
-            .into_diagnostic()?;
-        let current_block_height = env
-            .create_database(Some("current_block_height"))
-            .into_diagnostic()?;
-        let current_chain_tip = env
-            .create_database(Some("current_chain_tip"))
-            .into_diagnostic()?;
-        let sidechain_number_sequence_number_to_treasury_utxo = env
-            .create_database(Some("sidechain_number_sequence_number_to_treasury_utxo"))
-            .into_diagnostic()?;
-        let sidechain_number_to_treasury_utxo_count = env
-            .create_database(Some("sidechain_number_to_treasury_utxo_count"))
-            .into_diagnostic()?;
-        let block_height_to_accepted_bmm_block_hashes = env
-            .create_database(Some("block_height_to_accepted_bmm_block_hashes"))
-            .into_diagnostic()?;
-        Ok(Self {
-            env,
-            data_hash_to_sidechain_proposal,
-            sidechain_number_to_pending_m6ids,
-            sidechain_number_to_sidechain,
-            sidechain_number_to_ctip,
-            _previous_votes: previous_votes,
-            _leading_by_50: leading_by_50,
-            current_block_height,
-            current_chain_tip,
-            sidechain_number_sequence_number_to_treasury_utxo,
-            sidechain_number_to_treasury_utxo_count,
-
-            block_height_to_accepted_bmm_block_hashes,
-        })
+    pub fn new(data_dir: &Path) -> Result<Self, CreateDbsError> {
+        let dbs = Dbs::new(data_dir)?;
+        Ok(Self { dbs })
     }
 
     // See https://github.com/LayerTwo-Labs/bip300_bip301_specifications/blob/master/bip300.md#m1-1
@@ -158,12 +224,12 @@ impl Bip300 {
         proposal_height: u32,
         sidechain_number: u8,
         data: Vec<u8>,
-    ) -> Result<()> {
+    ) -> Result<(), HandleM1ProposeSidechainError> {
         let data_hash: Hash256 = sha256d(&data);
         if self
+            .dbs
             .data_hash_to_sidechain_proposal
-            .get(rwtxn, &data_hash)
-            .into_diagnostic()?
+            .get(rwtxn, &data_hash)?
             .is_some()
         {
             // If a proposal with the same data_hash already exists,
@@ -181,9 +247,11 @@ impl Bip300 {
             vote_count: 0,
             proposal_height,
         };
-        self.data_hash_to_sidechain_proposal
-            .put(rwtxn, &data_hash, &sidechain_proposal)
-            .into_diagnostic()
+        let () =
+            self.dbs
+                .data_hash_to_sidechain_proposal
+                .put(rwtxn, &data_hash, &sidechain_proposal)?;
+        Ok(())
     }
 
     // See https://github.com/LayerTwo-Labs/bip300_bip301_specifications/blob/master/bip300.md#m2-1
@@ -193,11 +261,11 @@ impl Bip300 {
         height: u32,
         sidechain_number: u8,
         data_hash: [u8; 32],
-    ) -> Result<()> {
+    ) -> Result<(), HandleM2AckSidechainError> {
         let sidechain_proposal = self
+            .dbs
             .data_hash_to_sidechain_proposal
-            .get(rwtxn, &data_hash)
-            .into_diagnostic()?;
+            .get(rwtxn, &data_hash)?;
         let Some(mut sidechain_proposal) = sidechain_proposal else {
             return Ok(());
         };
@@ -205,16 +273,16 @@ impl Bip300 {
             return Ok(());
         }
         sidechain_proposal.vote_count += 1;
-        self.data_hash_to_sidechain_proposal
-            .put(rwtxn, &data_hash, &sidechain_proposal)
-            .into_diagnostic()?;
+        self.dbs
+            .data_hash_to_sidechain_proposal
+            .put(rwtxn, &data_hash, &sidechain_proposal)?;
 
         let sidechain_proposal_age = height - sidechain_proposal.proposal_height;
 
         let sidechain_slot_is_used = self
+            .dbs
             .sidechain_number_to_sidechain
-            .get(rwtxn, &sidechain_number)
-            .into_diagnostic()?
+            .get(rwtxn, &sidechain_number)?
             .is_some();
 
         let new_sidechain_activated = {
@@ -229,8 +297,8 @@ impl Bip300 {
 
         if new_sidechain_activated {
             println!(
-                "sidechain {sidechain_number} in slot {} was activated",
-                String::from_utf8(sidechain_proposal.data.clone()).into_diagnostic()?,
+                "sidechain {} in slot {sidechain_number} was activated",
+                String::from_utf8_lossy(&sidechain_proposal.data),
             );
             let sidechain = Sidechain {
                 sidechain_number,
@@ -239,29 +307,33 @@ impl Bip300 {
                 activation_height: height,
                 vote_count: sidechain_proposal.vote_count,
             };
-            self.sidechain_number_to_sidechain
-                .put(rwtxn, &sidechain_number, &sidechain)
-                .into_diagnostic()?;
-            self.data_hash_to_sidechain_proposal
-                .delete(rwtxn, &data_hash)
-                .into_diagnostic()?;
+            self.dbs
+                .sidechain_number_to_sidechain
+                .put(rwtxn, &sidechain_number, &sidechain)?;
+            self.dbs
+                .data_hash_to_sidechain_proposal
+                .delete(rwtxn, &data_hash)?;
         }
         Ok(())
     }
 
-    fn handle_failed_sidechain_proposals(&self, rwtxn: &mut RwTxn, height: u32) -> Result<()> {
+    fn handle_failed_sidechain_proposals(
+        &self,
+        rwtxn: &mut RwTxn,
+        height: u32,
+    ) -> Result<(), HandleFailedSidechainProposalsError> {
         let failed_proposals: Vec<_> = self
+            .dbs
             .data_hash_to_sidechain_proposal
             .iter(rwtxn)
-            .into_diagnostic()?
-            .map(|item| item.into_diagnostic())
-            .transpose_into_fallible()
+            .map_err(DbIterError::from)?
+            .map_err(|err| HandleFailedSidechainProposalsError::DbIter(err.into()))
             .filter_map(|(data_hash, sidechain_proposal)| {
                 let sidechain_proposal_age = height - sidechain_proposal.proposal_height;
                 let sidechain_slot_is_used = self
+                    .dbs
                     .sidechain_number_to_sidechain
-                    .get(rwtxn, &sidechain_proposal.sidechain_number)
-                    .into_diagnostic()?
+                    .get(rwtxn, &sidechain_proposal.sidechain_number)?
                     .is_some();
                 // FIXME: Do we need to check that the vote_count is below the threshold, or is it
                 // enough to check that the max age was exceeded?
@@ -277,9 +349,9 @@ impl Bip300 {
             })
             .collect()?;
         for failed_proposal_data_hash in &failed_proposals {
-            self.data_hash_to_sidechain_proposal
-                .delete(rwtxn, failed_proposal_data_hash)
-                .into_diagnostic()?;
+            self.dbs
+                .data_hash_to_sidechain_proposal
+                .delete(rwtxn, failed_proposal_data_hash)?;
         }
         Ok(())
     }
@@ -289,42 +361,47 @@ impl Bip300 {
         rwtxn: &mut RwTxn,
         sidechain_number: u8,
         m6id: [u8; 32],
-    ) -> Result<()> {
+    ) -> Result<(), HandleM3ProposeBundleError> {
         if self
+            .dbs
             .sidechain_number_to_sidechain
-            .get(rwtxn, &sidechain_number)
-            .into_diagnostic()?
+            .get(rwtxn, &sidechain_number)?
             .is_none()
         {
-            return Err(miette!(
-                "can't propose bundle, sidechain slot {sidechain_number} is inactive"
-            ));
+            return Err(HandleM3ProposeBundleError::InactiveSidechain { sidechain_number });
         }
         let pending_m6ids = self
+            .dbs
             .sidechain_number_to_pending_m6ids
-            .get(rwtxn, &sidechain_number)
-            .into_diagnostic()?;
+            .get(rwtxn, &sidechain_number)?;
         let mut pending_m6ids = pending_m6ids.unwrap_or_default();
         let pending_m6id = PendingM6id {
             m6id,
             vote_count: 0,
         };
         pending_m6ids.push(pending_m6id);
-        self.sidechain_number_to_pending_m6ids
-            .put(rwtxn, &sidechain_number, &pending_m6ids)
-            .into_diagnostic()
+        let () = self.dbs.sidechain_number_to_pending_m6ids.put(
+            rwtxn,
+            &sidechain_number,
+            &pending_m6ids,
+        )?;
+        Ok(())
     }
 
-    fn handle_m4_votes(&self, rwtxn: &mut RwTxn, upvotes: &[u16]) -> Result<()> {
+    fn handle_m4_votes(
+        &self,
+        rwtxn: &mut RwTxn,
+        upvotes: &[u16],
+    ) -> Result<(), HandleM4VotesError> {
         for (sidechain_number, vote) in upvotes.iter().enumerate() {
             let vote = *vote;
             if vote == ABSTAIN_TWO_BYTES {
                 continue;
             }
             let pending_m6ids = self
+                .dbs
                 .sidechain_number_to_pending_m6ids
-                .get(rwtxn, &(sidechain_number as u8))
-                .into_diagnostic()?;
+                .get(rwtxn, &(sidechain_number as u8))?;
             let Some(mut pending_m6ids) = pending_m6ids else {
                 continue;
             };
@@ -337,14 +414,20 @@ impl Bip300 {
             } else if let Some(pending_m6id) = pending_m6ids.get_mut(vote as usize) {
                 pending_m6id.vote_count += 1;
             }
-            self.sidechain_number_to_pending_m6ids
-                .put(rwtxn, &(sidechain_number as u8), &pending_m6ids)
-                .into_diagnostic()?;
+            let () = self.dbs.sidechain_number_to_pending_m6ids.put(
+                rwtxn,
+                &(sidechain_number as u8),
+                &pending_m6ids,
+            )?;
         }
         Ok(())
     }
 
-    fn handle_m4_ack_bundles(&self, rwtxn: &mut RwTxn, m4: &M4AckBundles) -> Result<()> {
+    fn handle_m4_ack_bundles(
+        &self,
+        rwtxn: &mut RwTxn,
+        m4: &M4AckBundles,
+    ) -> Result<(), HandleM4AckBundlesError> {
         match m4 {
             M4AckBundles::LeadingBy50 => {
                 todo!();
@@ -355,46 +438,51 @@ impl Bip300 {
             M4AckBundles::OneByte { upvotes } => {
                 let upvotes: Vec<u16> = upvotes.iter().map(|vote| *vote as u16).collect();
                 self.handle_m4_votes(rwtxn, &upvotes)
+                    .map_err(HandleM4AckBundlesError::from)
             }
-            M4AckBundles::TwoBytes { upvotes } => self.handle_m4_votes(rwtxn, upvotes),
+            M4AckBundles::TwoBytes { upvotes } => self
+                .handle_m4_votes(rwtxn, upvotes)
+                .map_err(HandleM4AckBundlesError::from),
         }
     }
 
-    fn handle_failed_m6ids(&self, rwtxn: &mut RwTxn) -> Result<()> {
+    fn handle_failed_m6ids(&self, rwtxn: &mut RwTxn) -> Result<(), HandleFailedM6IdsError> {
         let mut updated_slots = HashMap::new();
-        for item in self
+        let () = self
+            .dbs
             .sidechain_number_to_pending_m6ids
             .iter(rwtxn)
-            .into_diagnostic()?
-        {
-            let (sidechain_number, pending_m6ids) = item.into_diagnostic()?;
-            let mut failed_m6ids = HashSet::new();
-            for pending_m6id in &pending_m6ids {
-                if pending_m6id.vote_count > WITHDRAWAL_BUNDLE_MAX_AGE {
-                    failed_m6ids.insert(pending_m6id.m6id);
+            .map_err(DbIterError::from)?
+            .map_err(DbIterError::from)
+            .for_each(|(sidechain_number, pending_m6ids)| {
+                let mut failed_m6ids = HashSet::new();
+                for pending_m6id in &pending_m6ids {
+                    if pending_m6id.vote_count > WITHDRAWAL_BUNDLE_MAX_AGE {
+                        failed_m6ids.insert(pending_m6id.m6id);
+                    }
                 }
-            }
-            let pending_m6ids: Vec<_> = pending_m6ids
-                .into_iter()
-                .filter(|pending_m6id| !failed_m6ids.contains(&pending_m6id.m6id))
-                .collect();
-            updated_slots.insert(sidechain_number, pending_m6ids);
-        }
+                let pending_m6ids: Vec<_> = pending_m6ids
+                    .into_iter()
+                    .filter(|pending_m6id| !failed_m6ids.contains(&pending_m6id.m6id))
+                    .collect();
+                updated_slots.insert(sidechain_number, pending_m6ids);
+                Ok(())
+            })?;
         for (sidechain_number, pending_m6ids) in updated_slots {
-            self.sidechain_number_to_pending_m6ids
-                .put(rwtxn, &sidechain_number, &pending_m6ids)
-                .into_diagnostic()?;
+            let () = self.dbs.sidechain_number_to_pending_m6ids.put(
+                rwtxn,
+                &sidechain_number,
+                &pending_m6ids,
+            )?;
         }
         Ok(())
     }
 
-    fn get_old_ctip(&self, rotxn: &RoTxn, sidechain_number: u8) -> Result<Option<Ctip>> {
-        self.sidechain_number_to_ctip
-            .get(rotxn, &sidechain_number)
-            .into_diagnostic()
-    }
-
-    fn handle_m5_m6(&self, rwtxn: &mut RwTxn, transaction: &Transaction) -> Result<()> {
+    fn handle_m5_m6(
+        &self,
+        rwtxn: &mut RwTxn,
+        transaction: &Transaction,
+    ) -> Result<(), HandleM5M6Error> {
         // TODO: Check that there is only one OP_DRIVECHAIN per sidechain slot.
         let (sidechain_number, new_ctip, new_total_value) = {
             let output = &transaction.output[0];
@@ -427,15 +515,17 @@ impl Bip300 {
         };
 
         let old_total_value = {
-            if let Some(old_ctip) = self.get_old_ctip(rwtxn, sidechain_number)? {
+            if let Some(old_ctip) = self
+                .dbs
+                .sidechain_number_to_ctip
+                .get(rwtxn, &sidechain_number)?
+            {
                 let old_ctip_found = transaction
                     .input
                     .iter()
                     .any(|input| input.previous_output == old_ctip.outpoint);
                 if !old_ctip_found {
-                    return Err(miette!(
-                        "old ctip wasn't spent for sidechain {sidechain_number}"
-                    ));
+                    return Err(HandleM5M6Error::OldCtipUnspent { sidechain_number });
                 }
                 old_ctip.value
             } else {
@@ -455,9 +545,9 @@ impl Bip300 {
             let mut m6_valid = false;
             let m6id = m6_to_id(transaction, old_total_value);
             if let Some(pending_m6ids) = self
+                .dbs
                 .sidechain_number_to_pending_m6ids
-                .get(rwtxn, &sidechain_number)
-                .into_diagnostic()?
+                .get(rwtxn, &sidechain_number)?
             {
                 for pending_m6id in &pending_m6ids {
                     if pending_m6id.m6id == m6id
@@ -471,37 +561,41 @@ impl Bip300 {
                         .into_iter()
                         .filter(|pending_m6id| pending_m6id.m6id != m6id)
                         .collect();
-                    self.sidechain_number_to_pending_m6ids
-                        .put(rwtxn, &sidechain_number, &pending_m6ids)
-                        .into_diagnostic()?;
+                    self.dbs.sidechain_number_to_pending_m6ids.put(
+                        rwtxn,
+                        &sidechain_number,
+                        &pending_m6ids,
+                    )?;
                 }
             }
             if !m6_valid {
-                return Err(miette!("m6 is invalid"));
+                return Err(HandleM5M6Error::InvalidM6);
             }
         }
         let mut treasury_utxo_count = self
+            .dbs
             .sidechain_number_to_treasury_utxo_count
-            .get(rwtxn, &sidechain_number)
-            .into_diagnostic()?
+            .get(rwtxn, &sidechain_number)?
             .unwrap_or(0);
         // Sequence numbers begin at 0, so the total number of treasury utxos in the database
         // gives us the *next* sequence number.
         let sequence_number = treasury_utxo_count;
-        self.sidechain_number_sequence_number_to_treasury_utxo
-            .put(rwtxn, &(sidechain_number, sequence_number), &treasury_utxo)
-            .into_diagnostic()?;
+        self.dbs
+            .sidechain_number_sequence_number_to_treasury_utxo
+            .put(rwtxn, &(sidechain_number, sequence_number), &treasury_utxo)?;
         treasury_utxo_count += 1;
-        self.sidechain_number_to_treasury_utxo_count
-            .put(rwtxn, &sidechain_number, &treasury_utxo_count)
-            .into_diagnostic()?;
+        self.dbs.sidechain_number_to_treasury_utxo_count.put(
+            rwtxn,
+            &sidechain_number,
+            &treasury_utxo_count,
+        )?;
         let new_ctip = Ctip {
             outpoint: new_ctip,
             value: new_total_value,
         };
-        self.sidechain_number_to_ctip
-            .put(rwtxn, &sidechain_number, &new_ctip)
-            .into_diagnostic()?;
+        self.dbs
+            .sidechain_number_to_ctip
+            .put(rwtxn, &sidechain_number, &new_ctip)?;
         Ok(())
     }
 
@@ -509,7 +603,7 @@ impl Bip300 {
         transaction: &Transaction,
         accepted_bmm_requests: &HashSet<(u8, [u8; 32])>,
         prev_mainchain_block_hash: &[u8; 32],
-    ) -> Result<()> {
+    ) -> Result<(), HandleM8Error> {
         let output = &transaction.output[0];
         let script = output.script_pubkey.to_bytes();
 
@@ -518,18 +612,21 @@ impl Bip300 {
                 bmm_request.sidechain_number,
                 bmm_request.sidechain_block_hash,
             )) {
-                return Err(miette!(
-                    "can't include a BMM request that was not accepted by the miners"
-                ));
+                return Err(HandleM8Error::NotAcceptedByMiners);
             }
             if bmm_request.prev_mainchain_block_hash != *prev_mainchain_block_hash {
-                return Err(miette!("BMM request expired"));
+                return Err(HandleM8Error::BmmRequestExpired);
             }
         }
         Ok(())
     }
 
-    pub fn connect_block(&self, rwtxn: &mut RwTxn, block: &Block, height: u32) -> Result<()> {
+    pub fn connect_block(
+        &self,
+        rwtxn: &mut RwTxn,
+        block: &Block,
+        height: u32,
+    ) -> Result<(), ConnectBlockError> {
         // TODO: Check that there are no duplicate M2s.
         let coinbase = &block.txdata[0];
         let mut bmmed_sidechain_slots = HashSet::new();
@@ -582,9 +679,7 @@ impl Bip300 {
                     sidechain_block_hash,
                 } => {
                     if bmmed_sidechain_slots.contains(&sidechain_number) {
-                        return Err(miette!(
-                            "more than one block bmmed in siidechain slot {sidechain_number}"
-                        ));
+                        return Err(ConnectBlockError::MultipleBmmBlocks { sidechain_number });
                     }
                     bmmed_sidechain_slots.insert(sidechain_number);
                     accepted_bmm_requests.insert((sidechain_number, sidechain_block_hash));
@@ -597,24 +692,26 @@ impl Bip300 {
                 .iter()
                 .map(|(_sidechain_number, hash)| *hash)
                 .collect();
-            self.block_height_to_accepted_bmm_block_hashes
-                .put(rwtxn, &height, &accepted_bmm_block_hashes)
-                .into_diagnostic()?;
-            const MAX_BMM_BLOCK_DEPTH: usize = 6 * 24 * 7; // 1008 blocks = ~1 week of time
+            self.dbs.block_height_to_accepted_bmm_block_hashes.put(
+                rwtxn,
+                &height,
+                &accepted_bmm_block_hashes,
+            )?;
+            const MAX_BMM_BLOCK_DEPTH: u64 = 6 * 24 * 7; // 1008 blocks = ~1 week of time
             if self
+                .dbs
                 .block_height_to_accepted_bmm_block_hashes
-                .len(rwtxn)
-                .into_diagnostic()?
+                .len(rwtxn)?
                 > MAX_BMM_BLOCK_DEPTH
             {
                 let (block_height, _) = self
+                    .dbs
                     .block_height_to_accepted_bmm_block_hashes
-                    .first(rwtxn)
-                    .into_diagnostic()?
+                    .first(rwtxn)?
                     .unwrap();
-                self.block_height_to_accepted_bmm_block_hashes
-                    .delete(rwtxn, &block_height)
-                    .into_diagnostic()?;
+                self.dbs
+                    .block_height_to_accepted_bmm_block_hashes
+                    .delete(rwtxn, &block_height)?;
             }
         }
 
@@ -636,38 +733,52 @@ impl Bip300 {
 
     // TODO: Add unit tests ensuring that `connect_block` and `disconnect_block` are inverse
     // operations.
-    pub fn _disconnect_block(&self, _block: &Block) -> Result<()> {
+    pub fn _disconnect_block(&self, _block: &Block) -> Result<(), DisconnectBlockError> {
         todo!();
     }
 
-    pub fn _is_transaction_valid(&self, _transaction: &Transaction) -> Result<()> {
+    pub fn _is_transaction_valid(
+        &self,
+        _transaction: &Transaction,
+    ) -> Result<(), TxValidationError> {
         todo!();
     }
 
-    fn initial_sync(&self, main_client: &Client) -> Result<()> {
-        let mut txn = self.env.write_txn().into_diagnostic()?;
+    fn initial_sync(&self, main_client: &Client) -> Result<(), InitialSyncError> {
+        let mut rwtxn = self.dbs.write_txn()?;
         let mut height = self
+            .dbs
             .current_block_height
-            .get(&txn, &UnitKey)
-            .into_diagnostic()?
+            .get(&rwtxn, &UnitKey)?
             .unwrap_or(0);
         let main_block_height: u32 = main_client
             .send_request("getblockcount", &[])
-            .into_diagnostic()?
-            .ok_or(miette!("failed to get block count"))?;
+            .map_err(|err| InitialSyncError::Rpc {
+                method: "getblockcount".to_owned(),
+                source: err,
+            })?
+            .ok_or(InitialSyncError::GetBlockCount)?;
         while height < main_block_height {
             let block_hash: String = main_client
                 .send_request("getblockhash", &[json!(height)])
-                .into_diagnostic()?
-                .ok_or(miette!("failed to get block hash"))?;
+                .map_err(|err| InitialSyncError::Rpc {
+                    method: "getblockhash".to_owned(),
+                    source: err,
+                })?
+                .ok_or(InitialSyncError::GetBlockHash { height })?;
             let block: String = main_client
                 .send_request("getblock", &[json!(block_hash), json!(0)])
-                .into_diagnostic()?
-                .ok_or(miette!("failed to get block"))?;
+                .map_err(|err| InitialSyncError::Rpc {
+                    method: "getblock".to_owned(),
+                    source: err,
+                })?
+                .ok_or_else(|| InitialSyncError::GetBlock {
+                    block_hash: block_hash.clone(),
+                })?;
             let block_bytes = hex::decode(&block).unwrap();
             let mut cursor = Cursor::new(block_bytes);
             let block = Block::consensus_decode(&mut cursor).unwrap();
-            self.connect_block(&mut txn, &block, height)?;
+            self.connect_block(&mut rwtxn, &block, height)?;
             {
                 /*
                 main_client
@@ -677,26 +788,36 @@ impl Bip300 {
                 */
             }
             height += 1;
-            let block_hash = hex::decode(block_hash)
-                .into_diagnostic()?
+            let block_hash = {
+                match hex::decode(&block_hash) {
+                    Ok(block_hash) => block_hash,
+                    Err(err) => {
+                        return Err(InitialSyncError::DecodeBlockHashHex {
+                            block_hash_hex: block_hash,
+                            source: err,
+                        })
+                    }
+                }
                 .try_into()
-                .unwrap();
-            self.current_chain_tip
-                .put(&mut txn, &UnitKey, &block_hash)
-                .into_diagnostic()?;
+                .unwrap()
+            };
+            self.dbs
+                .current_chain_tip
+                .put(&mut rwtxn, &UnitKey, &block_hash)?;
         }
-        self.current_block_height
-            .put(&mut txn, &UnitKey, &height)
-            .into_diagnostic()?;
-        txn.commit().into_diagnostic()?;
+        self.dbs
+            .current_block_height
+            .put(&mut rwtxn, &UnitKey, &height)?;
+        let () = rwtxn.commit()?;
         Ok(())
     }
 
     // FIXME: Rewrite all of this to be more readable.
     /// Single iteration of the task loop
-    fn task_loop_once(&self, main_client: &Client) -> Result<()> {
-        let mut txn = self.env.write_txn().into_diagnostic()?;
+    fn task_loop_once(&self, main_client: &Client) -> Result<(), miette::Report> {
+        let mut txn = self.dbs.write_txn().into_diagnostic()?;
         let mut height = self
+            .dbs
             .current_block_height
             .get(&txn, &UnitKey)
             .into_diagnostic()?
@@ -747,20 +868,22 @@ impl Bip300 {
                 .into_diagnostic()?
                 .try_into()
                 .unwrap();
-            self.current_chain_tip
+            self.dbs
+                .current_chain_tip
                 .put(&mut txn, &UnitKey, &block_hash)
                 .into_diagnostic()?;
         }
-        self.current_block_height
+        self.dbs
+            .current_block_height
             .put(&mut txn, &UnitKey, &height)
             .into_diagnostic()?;
         txn.commit().into_diagnostic()?;
         Ok(())
     }
 
-    async fn task(&self, conf: Config) -> Result<()> {
+    async fn task(&self, conf: Config) -> Result<(), miette::Report> {
         let main_client = &create_client(conf)?;
-        let () = self.initial_sync(main_client)?;
+        let () = self.initial_sync(main_client).into_diagnostic()?;
         let interval = interval(Duration::from_secs(1));
         IntervalStream::new(interval)
             .map(Ok)
@@ -777,37 +900,40 @@ impl Bip300 {
         })
     }
 
-    pub fn get_sidechain_proposals(&self) -> Result<Vec<(Hash256, SidechainProposal)>> {
-        let txn = self.env.read_txn().into_diagnostic()?;
-        let mut sidechain_proposals = vec![];
-        for sidechain_proposal in self
+    pub fn get_sidechain_proposals(
+        &self,
+    ) -> Result<Vec<(Hash256, SidechainProposal)>, miette::Report> {
+        let rotxn = self.dbs.read_txn().into_diagnostic()?;
+        let res = self
+            .dbs
             .data_hash_to_sidechain_proposal
-            .iter(&txn)
+            .iter(&rotxn)
             .into_diagnostic()?
-        {
-            let (data_hash, sidechain_proposal) = sidechain_proposal.into_diagnostic()?;
-            sidechain_proposals.push((data_hash, sidechain_proposal));
-        }
-        Ok(sidechain_proposals)
+            .collect()
+            .into_diagnostic()?;
+        Ok(res)
     }
 
-    pub fn get_sidechains(&self) -> Result<Vec<Sidechain>> {
-        let txn = self.env.read_txn().into_diagnostic()?;
-        let mut sidechains = vec![];
-        for sidechain in self
+    pub fn get_sidechains(&self) -> Result<Vec<Sidechain>, miette::Report> {
+        let rotxn = self.dbs.read_txn().into_diagnostic()?;
+        let res = self
+            .dbs
             .sidechain_number_to_sidechain
-            .iter(&txn)
+            .iter(&rotxn)
             .into_diagnostic()?
-        {
-            let (_sidechain_number, sidechain) = sidechain.into_diagnostic()?;
-            sidechains.push(sidechain);
-        }
-        Ok(sidechains)
+            .map(|(_sidechain_number, sidechain)| Ok(sidechain))
+            .collect()
+            .into_diagnostic()?;
+        Ok(res)
     }
 
-    pub fn get_ctip_sequence_number(&self, sidechain_number: u8) -> Result<Option<u64>> {
-        let rotxn = self.env.read_txn().into_diagnostic()?;
+    pub fn get_ctip_sequence_number(
+        &self,
+        sidechain_number: u8,
+    ) -> Result<Option<u64>, miette::Report> {
+        let rotxn = self.dbs.read_txn().into_diagnostic()?;
         let treasury_utxo_count = self
+            .dbs
             .sidechain_number_to_treasury_utxo_count
             .get(&rotxn, &sidechain_number)
             .into_diagnostic()?;
@@ -819,9 +945,10 @@ impl Bip300 {
         Ok(sequence_number)
     }
 
-    pub fn get_ctip(&self, sidechain_number: u8) -> Result<Option<Ctip>> {
-        let txn = self.env.read_txn().into_diagnostic()?;
+    pub fn get_ctip(&self, sidechain_number: u8) -> Result<Option<Ctip>, miette::Report> {
+        let txn = self.dbs.read_txn().into_diagnostic()?;
         let ctip = self
+            .dbs
             .sidechain_number_to_ctip
             .get(&txn, &sidechain_number)
             .into_diagnostic()?;
@@ -890,7 +1017,7 @@ impl Bip300 {
     */
 }
 
-fn create_client(conf: Config) -> Result<Client> {
+fn create_client(conf: Config) -> Result<Client, miette::Report> {
     if conf.node_rpc_user.is_none() != conf.node_rpc_password.is_none() {
         return Err(miette!("RPC user and password must be set together"));
     }
