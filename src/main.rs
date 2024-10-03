@@ -51,13 +51,17 @@ async fn main() -> Result<()> {
     let cli = cli::Config::parse();
     let serve_rpc_addr = cli.serve_rpc_addr;
 
-    let bip300 = Bip300::new(Path::new("./")).into_diagnostic()?;
+    let (err_tx, err_rx) = futures::channel::oneshot::channel();
+    let bip300 = Bip300::new(cli, Path::new("./"), |err| async {
+        let _: Result<(), _> = err_tx.send(err);
+    })
+    .into_diagnostic()?;
 
-    let task = bip300
-        .run(cli)
-        .map(|res| res.into_diagnostic())
-        .map_err(|err| miette!("unable to initialize bip300 handler: {}", err))
-        .unwrap_or_else(|err| eprintln!("{err:#}"));
+    let task = err_rx.map(|err| {
+        if let Ok(err) = err {
+            eprintln!("{err:#}");
+        }
+    });
 
     //let ((), ()) = future::try_join(task.map(Ok), run_server(bip300, addr)).await?;
     match future::select(task, run_server(bip300, serve_rpc_addr).boxed()).await {
