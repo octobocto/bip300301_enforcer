@@ -9,7 +9,7 @@ mod types;
 use clap::Parser;
 use futures::{
     future::{self, Either},
-    FutureExt, TryFutureExt,
+    FutureExt,
 };
 use miette::{miette, IntoDiagnostic, Result};
 use proto::mainchain;
@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
 
     let (err_tx, err_rx) = futures::channel::oneshot::channel();
     let bip300 = Bip300::new(cli, Path::new("./"), |err| async {
-        let _: Result<(), _> = err_tx.send(err);
+        let _send_err: Result<(), _> = err_tx.send(err);
     })
     .into_diagnostic()?;
 

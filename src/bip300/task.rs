@@ -3,7 +3,8 @@ use std::{collections::HashSet, time::Duration};
 use async_broadcast::{Sender, TrySendError};
 use bip300301_messages::{
     bitcoin::{
-        self, hashes::Hash, opcodes::all::OP_RETURN, Block, BlockHash, OutPoint, Transaction, TxOut,
+        self, hashes::Hash, opcodes::all::OP_RETURN, Amount, Block, BlockHash, OutPoint,
+        Transaction, TxOut,
     },
     m6_to_id, parse_coinbase_script, parse_m8_bmm_request, parse_op_drivechain, sha256d,
     CoinbaseMessage, M4AckBundles, ABSTAIN_TWO_BYTES, ALARM_TWO_BYTES,
@@ -481,12 +482,12 @@ fn handle_m5_m6(
             }
             old_ctip.value
         } else {
-            0
+            Amount::ZERO
         }
     };
     let treasury_utxo = TreasuryUtxo {
         outpoint: new_ctip,
-        address,
+        address: address.clone(),
         total_value: new_total_value,
         previous_total_value: old_total_value,
     };
@@ -496,7 +497,7 @@ fn handle_m5_m6(
     // M6
     if new_total_value < old_total_value {
         let mut m6_valid = false;
-        let m6id = m6_to_id(transaction, old_total_value);
+        let m6id = m6_to_id(transaction, old_total_value.to_sat());
         if let Some(pending_m6ids) = dbs
             .sidechain_number_to_pending_m6ids
             .get(rwtxn, &sidechain_number)?
@@ -590,7 +591,7 @@ fn handle_m8(
     Ok(())
 }
 
-pub fn connect_block(
+fn connect_block(
     rwtxn: &mut RwTxn,
     dbs: &Dbs,
     event_tx: &Sender<Event>,
@@ -734,13 +735,13 @@ pub fn connect_block(
             block_info,
         }
     };
-    let _: Result<Option<_>, TrySendError<_>> = event_tx.try_broadcast(event);
+    let _send_err: Result<Option<_>, TrySendError<_>> = event_tx.try_broadcast(event);
     Ok(())
 }
 
 // TODO: Add unit tests ensuring that `connect_block` and `disconnect_block` are inverse
 // operations.
-pub fn _disconnect_block(
+fn _disconnect_block(
     _rwtxn: &mut RwTxn,
     _dbs: &Dbs,
     event_tx: &Sender<Event>,
@@ -748,11 +749,11 @@ pub fn _disconnect_block(
 ) -> Result<(), DisconnectBlockError> {
     todo!();
     let event = Event::DisconnectBlock { block_hash };
-    let _: Result<Option<_>, TrySendError<_>> = event_tx.try_broadcast(event);
+    let _send_err: Result<Option<_>, TrySendError<_>> = event_tx.try_broadcast(event);
     Ok(())
 }
 
-pub fn _is_transaction_valid(
+fn _is_transaction_valid(
     _rotxn: &mut RoTxn,
     _dbs: &Dbs,
     _transaction: &Transaction,
@@ -851,8 +852,8 @@ fn task_loop_once(
             .send_request("getblockhash", &[json!(height)])
             .into_diagnostic()?
             .ok_or(miette!("failed to get block hash"))?;
-        let prev_blockhash = BlockHash::from_str(&block_hash).unwrap();
-
+        let prev_blockhash =
+            bitcoin::consensus::encode::deserialize_hex::<BlockHash>(&block_hash).unwrap();
         println!("Mainchain tip: {prev_blockhash}");
 
         let block: String = main_client

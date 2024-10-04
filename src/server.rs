@@ -18,7 +18,7 @@ use crate::proto::{
 };
 
 use bip300301_messages::{
-    bitcoin::{self, absolute::Height, hashes::Hash, Transaction, TxOut},
+    bitcoin::{self, absolute::Height, hashes::Hash, Amount, Transaction, TxOut},
     CoinbaseMessage,
 };
 use miette::Result;
@@ -161,7 +161,7 @@ impl MainchainService for Bip300 {
         let output = messages
             .into_iter()
             .map(|message| TxOut {
-                value: 0,
+                value: Amount::ZERO,
                 script_pubkey: message.into(),
             })
             .collect();
@@ -169,7 +169,7 @@ impl MainchainService for Bip300 {
             output,
             input: vec![],
             lock_time: bitcoin::absolute::LockTime::Blocks(Height::ZERO),
-            version: 2,
+            version: bitcoin::transaction::Version::TWO,
         };
         let psbt = bitcoin::consensus::serialize(&transasction);
         let response = GetCoinbasePsbtResponse { psbt };
@@ -204,7 +204,7 @@ impl MainchainService for Bip300 {
             let ctip = Ctip {
                 txid: ctip.outpoint.txid.as_byte_array().into(),
                 vout: ctip.outpoint.vout,
-                value: ctip.value,
+                value: ctip.value.to_sat(),
                 sequence_number,
             };
             let response = GetCtipResponse { ctip: Some(ctip) };

@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     ops::DerefMut,
     path::{Path, PathBuf},
     sync::Arc,
@@ -314,14 +313,14 @@ impl<KC, DC> Database<KC, DC> {
 
 #[derive(Debug, Error)]
 #[error("Error opening database env at (`{path}`)")]
-pub(super) struct OpenEnvError {
+pub struct OpenEnvError {
     path: PathBuf,
     source: heed::Error,
 }
 
 #[derive(Debug, Error)]
 #[error("Error creating database `{name}` in `{path}`")]
-pub(super) struct CreateDbError {
+pub struct CreateDbError {
     name: &'static str,
     path: PathBuf,
     source: heed::Error,

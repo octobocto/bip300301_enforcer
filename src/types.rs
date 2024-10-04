@@ -1,4 +1,4 @@
-use bip300301_messages::bitcoin::{block::Header, hashes::Hash, OutPoint, TxOut};
+use bip300301_messages::bitcoin::{Amount, OutPoint, TxOut};
 use hashlink::LinkedHashMap;
 use serde::{Deserialize, Serialize};
 
@@ -7,7 +7,7 @@ pub type Hash256 = [u8; 32];
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Ctip {
     pub outpoint: OutPoint,
-    pub value: u64,
+    pub value: Amount,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,8 +37,8 @@ pub struct PendingM6id {
 pub struct TreasuryUtxo {
     pub outpoint: OutPoint,
     pub address: Option<Vec<u8>>,
-    pub total_value: u64,
-    pub previous_total_value: u64,
+    pub total_value: Amount,
+    pub previous_total_value: Amount,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
