@@ -285,6 +285,10 @@ impl<KC, DC> Database<KC, DC> {
         })
     }
 
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
     pub fn put<'a>(
         &self,
         rwtxn: &mut RwTxn<'_>,

@@ -23,8 +23,8 @@ use ureq_jsonrpc::{json, Client};
 use crate::{
     cli::Config,
     types::{
-        BlockInfo, Ctip, Deposit, Event, Hash256, HeaderInfo, PendingM6id, Sidechain,
-        SidechainNumber, SidechainProposal, TreasuryUtxo, WithdrawalBundleEvent,
+        BlockInfo, BmmCommitments, Ctip, Deposit, Event, Hash256, HeaderInfo, PendingM6id,
+        Sidechain, SidechainNumber, SidechainProposal, TreasuryUtxo, WithdrawalBundleEvent,
         WithdrawalBundleEventKind,
     },
 };
@@ -183,6 +183,8 @@ enum InitialSyncError {
     GetBlock { block_hash: String },
     #[error("Failed to get block count")]
     GetBlockCount,
+    #[error("Failed to get best block hash")]
+    GetBestBlockHash,
     #[error("Failed to get block hash for height `{height}`")]
     GetBlockHash { height: u32 },
     #[error("RPC error: `{method}`")]
@@ -576,20 +578,20 @@ fn handle_m5_m6(
 
 fn handle_m8(
     transaction: &Transaction,
-    accepted_bmm_requests: &LinkedHashSet<(SidechainNumber, [u8; 32])>,
-    prev_mainchain_block_hash: &[u8; 32],
+    accepted_bmm_requests: &BmmCommitments,
+    prev_mainchain_block_hash: &BlockHash,
 ) -> Result<(), HandleM8Error> {
     let output = &transaction.output[0];
     let script = output.script_pubkey.to_bytes();
 
     if let Ok((_input, bmm_request)) = parse_m8_bmm_request(&script) {
-        if !accepted_bmm_requests.contains(&(
-            bmm_request.sidechain_number.into(),
-            bmm_request.sidechain_block_hash,
-        )) {
+        if !accepted_bmm_requests
+            .get(&bmm_request.sidechain_number.into())
+            .is_some_and(|commitment| *commitment == bmm_request.sidechain_block_hash)
+        {
             return Err(HandleM8Error::NotAcceptedByMiners);
         }
-        if bmm_request.prev_mainchain_block_hash != *prev_mainchain_block_hash {
+        if bmm_request.prev_mainchain_block_hash != prev_mainchain_block_hash.to_byte_array() {
             return Err(HandleM8Error::BmmRequestExpired);
         }
     }
@@ -606,7 +608,7 @@ fn connect_block(
     // TODO: Check that there are no duplicate M2s.
     let coinbase = &block.txdata[0];
     let mut bmmed_sidechain_slots = HashSet::new();
-    let mut accepted_bmm_requests = LinkedHashSet::new();
+    let mut accepted_bmm_requests = BmmCommitments::new();
     let mut withdrawal_bundle_events = Vec::new();
     for output in &coinbase.output {
         let Ok((_, message)) = parse_coinbase_script(&output.script_pubkey) else {
@@ -668,7 +670,7 @@ fn connect_block(
                     return Err(ConnectBlockError::MultipleBmmBlocks { sidechain_number });
                 }
                 bmmed_sidechain_slots.insert(sidechain_number);
-                accepted_bmm_requests.insert((sidechain_number, sidechain_block_hash));
+                accepted_bmm_requests.insert(sidechain_number, sidechain_block_hash);
             }
         }
     }
@@ -698,8 +700,7 @@ fn connect_block(
     let failed_m6ids = handle_failed_m6ids(rwtxn, dbs)?;
 
     let block_hash = block.header.block_hash();
-    let block_hash = block_hash.as_byte_array();
-    let prev_mainchain_block_hash = block.header.prev_blockhash.as_byte_array();
+    let prev_mainchain_block_hash = block.header.prev_blockhash;
 
     let mut deposits = Vec::new();
     withdrawal_bundle_events.extend(failed_m6ids.into_iter().map(|(sidechain_id, m6id)| {
@@ -725,16 +726,23 @@ fn connect_block(
         let () = handle_m8(
             transaction,
             &accepted_bmm_requests,
-            prev_mainchain_block_hash,
+            &prev_mainchain_block_hash,
         )?;
     }
     let () = dbs
+        .block_hash_to_bmm_commitments
+        .put(rwtxn, &block_hash, &accepted_bmm_requests)?;
+    let () = dbs
         .block_hash_to_deposits
-        .put(rwtxn, block_hash, &deposits)?;
+        .put(rwtxn, &block_hash, &deposits)?;
+    let () = dbs
+        .block_hash_to_header
+        .put(rwtxn, &block_hash, &block.header)?;
+    let () = dbs.block_hash_to_height.put(rwtxn, &block_hash, &height)?;
     let event = {
         let header_info = HeaderInfo {
-            block_hash: *block_hash,
-            prev_block_hash: *prev_mainchain_block_hash,
+            block_hash,
+            prev_block_hash: prev_mainchain_block_hash,
             height,
             work: block.header.work().to_le_bytes(),
         };

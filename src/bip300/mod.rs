@@ -1,20 +1,30 @@
 use std::{future::Future, path::Path, sync::Arc};
 
 use async_broadcast::{broadcast, InactiveReceiver, Receiver};
+use bip300301_messages::bitcoin::BlockHash;
 use fallible_iterator::FallibleIterator;
 use futures::FutureExt;
 use miette::IntoDiagnostic;
+use thiserror::Error;
 use tokio::task::{spawn, JoinHandle};
 
 use crate::{
     cli::Config,
-    types::{Ctip, Event, Hash256, Sidechain, SidechainNumber, SidechainProposal},
+    types::{Ctip, Event, Hash256, Sidechain, SidechainNumber, SidechainProposal, TwoWayPegData},
 };
 
 mod dbs;
 mod task;
 
 use dbs::{CreateDbsError, Dbs};
+
+#[derive(Debug, Error)]
+pub enum GetTwoWayPegDataError {
+    #[error(transparent)]
+    ReadTxn(#[from] dbs::ReadTxnError),
+    #[error(transparent)]
+    GetTwoWayPegData(#[from] dbs::GetTwoWayPegDataError),
+}
 
 #[derive(Clone)]
 pub struct Bip300 {
@@ -118,6 +128,18 @@ impl Bip300 {
             .get(&txn, &sidechain_number)
             .into_diagnostic()?;
         Ok(ctip)
+    }
+
+    pub fn get_two_way_peg_data(
+        &self,
+        start_block: Option<BlockHash>,
+        end_block: BlockHash,
+    ) -> Result<Vec<TwoWayPegData>, GetTwoWayPegDataError> {
+        let rotxn = self.dbs.read_txn()?;
+        let res = self
+            .dbs
+            .get_two_way_peg_data(&rotxn, start_block, end_block)?;
+        Ok(res)
     }
 
     /*

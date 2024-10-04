@@ -1,4 +1,4 @@
-use bip300301_messages::bitcoin::{Amount, OutPoint, TxOut};
+use bip300301_messages::bitcoin::{Amount, BlockHash, OutPoint, TxOut};
 use hashlink::LinkedHashMap;
 use serde::{Deserialize, Serialize};
 
@@ -70,33 +70,43 @@ pub struct Deposit {
 
 #[derive(Clone, Copy, Debug)]
 pub struct HeaderInfo {
-    pub block_hash: Hash256,
-    pub prev_block_hash: Hash256,
+    pub block_hash: BlockHash,
+    pub prev_block_hash: BlockHash,
     pub height: u32,
     /// Total work as a uint256, little-endian
     pub work: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum WithdrawalBundleEventKind {
     Submitted,
     Failed,
     Succeeded,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WithdrawalBundleEvent {
     pub sidechain_id: SidechainNumber,
     pub m6id: Hash256,
     pub kind: WithdrawalBundleEventKind,
 }
 
+/// BMM commitments for a single block
+pub type BmmCommitments = LinkedHashMap<SidechainNumber, Hash256>;
+
 #[derive(Clone, Debug, Default)]
 pub struct BlockInfo {
     pub deposits: Vec<Deposit>,
     pub withdrawal_bundle_events: Vec<WithdrawalBundleEvent>,
     /// Sequential map of sidechain IDs to BMM commitments
-    pub bmm_commitments: LinkedHashMap<SidechainNumber, Hash256>,
+    pub bmm_commitments: BmmCommitments,
+}
+
+/// Two-way peg data for a single block
+#[derive(Clone, Debug)]
+pub struct TwoWayPegData {
+    pub header_info: HeaderInfo,
+    pub block_info: BlockInfo,
 }
 
 #[derive(Clone, Debug)]

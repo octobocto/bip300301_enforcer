@@ -23,7 +23,7 @@ use crate::{
 
 use async_broadcast::RecvError;
 use bip300301_messages::{
-    bitcoin::{self, absolute::Height, hashes::Hash, Amount, Transaction, TxOut},
+    bitcoin::{self, absolute::Height, hashes::Hash, Amount, BlockHash, Transaction, TxOut},
     CoinbaseMessage,
 };
 use futures::{stream::BoxStream, StreamExt, TryStreamExt as _};
@@ -321,17 +321,19 @@ impl MainchainService for Bip300 {
             start_block_hash,
             end_block_hash,
         } = request.into_inner();
-        let _sidechain_id: u8 = {
+        let sidechain_id: SidechainNumber = {
             let sidechain_id: u32 = sidechain_id
                 .ok_or_else(|| missing_field::<GetTwoWayPegDataRequest>("sidechain_id"))?;
-            sidechain_id.try_into().map_err(|_| {
-                invalid_field_value::<GetTwoWayPegDataRequest>(
-                    "sidechain_id",
-                    &sidechain_id.to_string(),
-                )
-            })?
+            <u8 as TryFrom<_>>::try_from(sidechain_id)
+                .map_err(|_| {
+                    invalid_field_value::<GetTwoWayPegDataRequest>(
+                        "sidechain_id",
+                        &sidechain_id.to_string(),
+                    )
+                })?
+                .into()
         };
-        let _start_block_hash: Option<[u8; 32]> = start_block_hash
+        let start_block_hash: Option<BlockHash> = start_block_hash
             .map(|start_block_hash| {
                 start_block_hash.try_into().map_err(|start_block_hash| {
                     invalid_field_value::<GetTwoWayPegDataRequest>(
@@ -340,8 +342,9 @@ impl MainchainService for Bip300 {
                     )
                 })
             })
-            .transpose()?;
-        let _end_block_hash: [u8; 32] = end_block_hash
+            .transpose()?
+            .map(BlockHash::from_byte_array);
+        let end_block_hash: [u8; 32] = end_block_hash
             .ok_or_else(|| missing_field::<GetTwoWayPegDataRequest>("end_block_hash"))?
             .try_into()
             .map_err(|end_block_hash| {
@@ -350,8 +353,20 @@ impl MainchainService for Bip300 {
                     &hex::encode(end_block_hash),
                 )
             })?;
-        // FIXME: implement
-        todo!()
+        let end_block_hash = BlockHash::from_byte_array(end_block_hash);
+        match self.get_two_way_peg_data(start_block_hash, end_block_hash) {
+            Err(err) => Err(tonic::Status::from_error(Box::new(err))),
+            Ok(two_way_peg_data) => {
+                let two_way_peg_data = two_way_peg_data
+                    .into_iter()
+                    .filter_map(|two_way_peg_data| (sidechain_id, two_way_peg_data).try_into().ok())
+                    .collect();
+                let resp = GetTwoWayPegDataResponse {
+                    blocks: two_way_peg_data,
+                };
+                Ok(tonic::Response::new(resp))
+            }
+        }
     }
 
     type SubscribeEventsStream = BoxStream<'static, Result<SubscribeEventsResponse, tonic::Status>>;

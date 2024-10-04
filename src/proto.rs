@@ -83,7 +83,7 @@ impl Error {
 pub mod mainchain {
     tonic::include_proto!("cusf.mainchain.v1");
 
-    use bip300301_messages::bitcoin::hashes::Hash;
+    use bip300301_messages::bitcoin::hashes::Hash as _;
     #[allow(unused_imports)]
     pub use mainchain_service_server::{
         self as server, MainchainService as Service, MainchainServiceServer as Server,
@@ -292,9 +292,11 @@ pub mod mainchain {
 
     impl From<crate::types::HeaderInfo> for BlockHeaderInfo {
         fn from(header_info: crate::types::HeaderInfo) -> Self {
+            let block_hash = header_info.block_hash.to_byte_array().to_vec();
+            let prev_block_hash = header_info.prev_block_hash.to_byte_array().to_vec();
             Self {
-                block_hash: header_info.block_hash.into(),
-                prev_block_hash: header_info.prev_block_hash.into(),
+                block_hash,
+                prev_block_hash,
                 height: header_info.height,
                 work: header_info.work.into(),
             }
@@ -406,6 +408,29 @@ pub mod mainchain {
                 withdrawal_bundle_events,
                 bmm_commitment,
             }
+        }
+    }
+
+    impl TryFrom<(SidechainNumber, crate::types::TwoWayPegData)>
+        for get_two_way_peg_data_response::ResponseItem
+    {
+        type Error = ();
+
+        fn try_from(
+            (sidechain_number, two_way_peg_data): (SidechainNumber, crate::types::TwoWayPegData),
+        ) -> Result<Self, Self::Error> {
+            let crate::types::TwoWayPegData {
+                header_info,
+                block_info,
+            } = two_way_peg_data;
+            let block_info = BlockInfo::from((sidechain_number, block_info));
+            if block_info == BlockInfo::default() {
+                return Err(());
+            }
+            Ok(Self {
+                block_header_info: Some(header_info.into()),
+                block_info: Some(block_info),
+            })
         }
     }
 
