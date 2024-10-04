@@ -12,8 +12,8 @@ use crate::types::{
 mod util;
 
 pub use util::{
-    CommitWriteTxnError, Database, DbDeleteError, DbFirstError, DbGetError, DbIterError,
-    DbLenError, DbPutError, Env, ReadTxnError, RwTxn, UnitKey, WriteTxnError,
+    CommitWriteTxnError, Database, DbDeleteError, DbFirstError, DbIterError, DbLenError,
+    DbPutError, DbTryGetError, Env, ReadTxnError, RwTxn, UnitKey, WriteTxnError,
 };
 
 #[derive(Debug, Error)]
@@ -68,9 +68,25 @@ impl InconsistentDbsError {
 }
 
 #[derive(Debug, Error)]
+pub(crate) enum TryGetHeaderInfoError {
+    #[error(transparent)]
+    DbTryGet(#[from] DbTryGetError),
+    #[error(transparent)]
+    InconsistentDbs(#[from] InconsistentDbsError),
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum GetHeaderInfoError {
+    #[error("Missing header info for block hash `{block_hash}`")]
+    MissingValue { block_hash: BlockHash },
+    #[error(transparent)]
+    TryGetHeaderInfo(#[from] TryGetHeaderInfoError),
+}
+
+#[derive(Debug, Error)]
 pub(crate) enum TryGetBlockInfoError {
     #[error(transparent)]
-    DbGet(#[from] DbGetError),
+    DbTryGet(#[from] DbTryGetError),
     #[error(transparent)]
     InconsistentDbs(#[from] InconsistentDbsError),
 }
@@ -78,11 +94,11 @@ pub(crate) enum TryGetBlockInfoError {
 #[derive(Debug, Error)]
 pub(crate) enum TryGetTwoWayPegDataSingleError {
     #[error(transparent)]
-    DbGet(#[from] DbGetError),
-    #[error(transparent)]
     InconsistentDbs(#[from] InconsistentDbsError),
     #[error(transparent)]
     TryGetBlockInfo(#[from] TryGetBlockInfoError),
+    #[error(transparent)]
+    TryGetHeaderInfo(#[from] TryGetHeaderInfoError),
 }
 
 #[derive(Debug, Error)]
@@ -211,18 +227,22 @@ impl Dbs {
         self.env.write_txn()
     }
 
-    /// Get header info
     fn try_get_header_info(
         &self,
         rotxn: &RoTxn,
         block_hash: &BlockHash,
-    ) -> Result<Option<HeaderInfo>, DbGetError> {
-        let Some(header) = self.block_hash_to_header.get(rotxn, &block_hash)? else {
+    ) -> Result<Option<HeaderInfo>, TryGetHeaderInfoError> {
+        let Some(header) = self.block_hash_to_header.try_get(rotxn, &block_hash)? else {
             return Ok(None);
         };
         assert_eq!(header.block_hash(), *block_hash);
-        let Some(height) = self.block_hash_to_height.get(rotxn, &block_hash)? else {
-            return Ok(None);
+        let Some(height) = self.block_hash_to_height.try_get(rotxn, &block_hash)? else {
+            let err = InconsistentDbsError::new(
+                block_hash,
+                &self.block_hash_to_header,
+                &self.block_hash_to_height,
+            );
+            return Err(TryGetHeaderInfoError::InconsistentDbs(err));
         };
         let header_info = HeaderInfo {
             block_hash: header.block_hash(),
@@ -233,17 +253,29 @@ impl Dbs {
         Ok(Some(header_info))
     }
 
+    pub fn get_header_info(
+        &self,
+        rotxn: &RoTxn,
+        block_hash: &BlockHash,
+    ) -> Result<HeaderInfo, GetHeaderInfoError> {
+        self.try_get_header_info(rotxn, block_hash)?.ok_or_else(|| {
+            GetHeaderInfoError::MissingValue {
+                block_hash: *block_hash,
+            }
+        })
+    }
+
     fn try_get_block_info(
         &self,
         rotxn: &RoTxn,
         block_hash: &BlockHash,
     ) -> Result<Option<BlockInfo>, TryGetBlockInfoError> {
-        let Some(deposits) = self.block_hash_to_deposits.get(rotxn, &block_hash)? else {
+        let Some(deposits) = self.block_hash_to_deposits.try_get(rotxn, &block_hash)? else {
             return Ok(None);
         };
         let Some(withdrawal_bundle_events) = self
             .block_hash_to_withdrawal_bundle_events
-            .get(rotxn, &block_hash)?
+            .try_get(rotxn, &block_hash)?
         else {
             let err = InconsistentDbsError::new(
                 block_hash,
@@ -252,7 +284,9 @@ impl Dbs {
             );
             return Err(TryGetBlockInfoError::InconsistentDbs(err));
         };
-        let Some(bmm_commitments) = self.block_hash_to_bmm_commitments.get(rotxn, &block_hash)?
+        let Some(bmm_commitments) = self
+            .block_hash_to_bmm_commitments
+            .try_get(rotxn, &block_hash)?
         else {
             let err = InconsistentDbsError::new(
                 block_hash,

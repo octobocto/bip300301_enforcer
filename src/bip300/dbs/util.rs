@@ -110,18 +110,6 @@ pub struct DbFirstError {
 }
 
 #[derive(Debug, Error)]
-#[error(
-    "Failed to read from db `{db_name}` at `{db_path}` ({})",
-    display_key_bytes(.key_bytes)
-)]
-pub struct DbGetError {
-    db_name: &'static str,
-    db_path: PathBuf,
-    key_bytes: Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>,
-    source: heed::Error,
-}
-
-#[derive(Debug, Error)]
 #[error("Failed to initialize read-only iterator for db `{db_name}` at `{db_path}`")]
 pub struct DbIterInitError {
     db_name: &'static str,
@@ -180,6 +168,33 @@ pub struct DbPutError {
     source: heed::Error,
 }
 
+#[derive(Debug, Error)]
+#[error(
+    "Failed to read from db `{db_name}` at `{db_path}` ({})",
+    display_key_bytes(.key_bytes)
+)]
+pub struct DbTryGetError {
+    db_name: &'static str,
+    db_path: PathBuf,
+    key_bytes: Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>,
+    source: heed::Error,
+}
+
+#[derive(Debug, Error)]
+pub enum DbGetError {
+    #[error(transparent)]
+    DbTryGet(#[from] DbTryGetError),
+    #[error(
+        "Missing value from db `{db_name}` at `{db_path}` (key: {})",
+        hex::encode(.key_bytes)
+    )]
+    MissingValue {
+        db_name: &'static str,
+        db_path: PathBuf,
+        key_bytes: Vec<u8>,
+    },
+}
+
 /// Wrapper for heed's `Database`
 #[derive(Educe)]
 #[educe(Clone, Debug)]
@@ -222,27 +237,6 @@ impl<KC, DC> Database<KC, DC> {
             db_name: self.name,
             db_path: (*self.path).clone(),
             source: err,
-        })
-    }
-
-    pub fn get<'a, 'txn>(
-        &self,
-        rotxn: &'txn RoTxn<'_>,
-        key: &'a KC::EItem,
-    ) -> Result<Option<DC::DItem>, DbGetError>
-    where
-        KC: BytesEncode<'a>,
-        DC: BytesDecode<'txn>,
-    {
-        self.inner.get(rotxn, key).map_err(|err| {
-            let key_bytes =
-                <KC as BytesEncode>::bytes_encode(key).map(|key_bytes| key_bytes.to_vec());
-            DbGetError {
-                db_name: self.name,
-                db_path: (*self.path).clone(),
-                key_bytes,
-                source: err,
-            }
         })
     }
 
@@ -310,6 +304,49 @@ impl<KC, DC> Database<KC, DC> {
                 key_bytes,
                 value_bytes,
                 source: err,
+            }
+        })
+    }
+
+    pub fn try_get<'a, 'txn>(
+        &self,
+        rotxn: &'txn RoTxn<'_>,
+        key: &'a KC::EItem,
+    ) -> Result<Option<DC::DItem>, DbTryGetError>
+    where
+        KC: BytesEncode<'a>,
+        DC: BytesDecode<'txn>,
+    {
+        self.inner.get(rotxn, key).map_err(|err| {
+            let key_bytes =
+                <KC as BytesEncode>::bytes_encode(key).map(|key_bytes| key_bytes.to_vec());
+            DbTryGetError {
+                db_name: self.name,
+                db_path: (*self.path).clone(),
+                key_bytes,
+                source: err,
+            }
+        })
+    }
+
+    pub fn get<'a, 'txn>(
+        &self,
+        rotxn: &'txn RoTxn<'_>,
+        key: &'a KC::EItem,
+    ) -> Result<DC::DItem, DbGetError>
+    where
+        KC: BytesEncode<'a>,
+        DC: BytesDecode<'txn>,
+    {
+        self.try_get(rotxn, key)?.ok_or_else(|| {
+            let key_bytes = <KC as BytesEncode>::bytes_encode(key)
+                // Safety: key must encode successfully, as try_get succeeded
+                .unwrap()
+                .to_vec();
+            DbGetError::MissingValue {
+                db_name: self.name,
+                db_path: (*self.path).clone(),
+                key_bytes,
             }
         })
     }

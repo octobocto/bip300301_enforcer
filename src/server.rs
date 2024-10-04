@@ -93,10 +93,26 @@ impl MainchainService for Bip300 {
     }
     async fn get_block_header_info(
         &self,
-        _request: tonic::Request<GetBlockHeaderInfoRequest>,
+        request: tonic::Request<GetBlockHeaderInfoRequest>,
     ) -> Result<tonic::Response<GetBlockHeaderInfoResponse>, tonic::Status> {
-        // FIXME: implement
-        todo!()
+        let GetBlockHeaderInfoRequest { block_hash } = request.into_inner();
+        let block_hash = block_hash
+            .ok_or_else(|| missing_field::<GetBlockHeaderInfoRequest>("block_hash"))?
+            .try_into()
+            .map_err(|block_hash| {
+                invalid_field_value::<GetBlockHeaderInfoRequest>(
+                    "block_hash",
+                    &hex::encode(block_hash),
+                )
+            })?;
+        let block_hash = BlockHash::from_byte_array(block_hash);
+        let header_info = self
+            .get_header_info(&block_hash)
+            .map_err(|err| tonic::Status::from_error(Box::new(err)))?;
+        let resp = GetBlockHeaderInfoResponse {
+            header_info: Some(header_info.into()),
+        };
+        Ok(tonic::Response::new(resp))
     }
 
     async fn get_block_info(

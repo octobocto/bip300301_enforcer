@@ -10,13 +10,24 @@ use tokio::task::{spawn, JoinHandle};
 
 use crate::{
     cli::Config,
-    types::{Ctip, Event, Hash256, Sidechain, SidechainNumber, SidechainProposal, TwoWayPegData},
+    types::{
+        Ctip, Event, Hash256, HeaderInfo, Sidechain, SidechainNumber, SidechainProposal,
+        TwoWayPegData,
+    },
 };
 
 mod dbs;
 mod task;
 
 use dbs::{CreateDbsError, Dbs};
+
+#[derive(Debug, Error)]
+pub enum GetHeaderInfoError {
+    #[error(transparent)]
+    ReadTxn(#[from] dbs::ReadTxnError),
+    #[error(transparent)]
+    GetHeaderInfo(#[from] dbs::GetHeaderInfoError),
+}
 
 #[derive(Debug, Error)]
 pub enum GetTwoWayPegDataError {
@@ -107,7 +118,7 @@ impl Bip300 {
         let treasury_utxo_count = self
             .dbs
             .sidechain_number_to_treasury_utxo_count
-            .get(&rotxn, &sidechain_number)
+            .try_get(&rotxn, &sidechain_number)
             .into_diagnostic()?;
         // Sequence numbers begin at 0, so the total number of treasury utxos in the database
         // gives us the *next* sequence number.
@@ -125,9 +136,18 @@ impl Bip300 {
         let ctip = self
             .dbs
             .sidechain_number_to_ctip
-            .get(&txn, &sidechain_number)
+            .try_get(&txn, &sidechain_number)
             .into_diagnostic()?;
         Ok(ctip)
+    }
+
+    pub fn get_header_info(
+        &self,
+        block_hash: &BlockHash,
+    ) -> Result<HeaderInfo, GetHeaderInfoError> {
+        let rotxn = self.dbs.read_txn()?;
+        let res = self.dbs.get_header_info(&rotxn, &block_hash)?;
+        Ok(res)
     }
 
     pub fn get_two_way_peg_data(

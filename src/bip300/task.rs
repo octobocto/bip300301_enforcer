@@ -30,8 +30,8 @@ use crate::{
 };
 
 use super::dbs::{
-    CommitWriteTxnError, DbDeleteError, DbFirstError, DbGetError, DbIterError, DbLenError,
-    DbPutError, Dbs, RwTxn, UnitKey, WriteTxnError,
+    CommitWriteTxnError, DbDeleteError, DbFirstError, DbIterError, DbLenError, DbPutError,
+    DbTryGetError, Dbs, RwTxn, UnitKey, WriteTxnError,
 };
 
 const WITHDRAWAL_BUNDLE_MAX_AGE: u16 = 10;
@@ -48,9 +48,9 @@ const UNUSED_SIDECHAIN_SLOT_ACTIVATION_THRESHOLD: u16 =
 #[derive(Debug, Error)]
 enum HandleM1ProposeSidechainError {
     #[error(transparent)]
-    DbGet(#[from] DbGetError),
-    #[error(transparent)]
     DbPut(#[from] DbPutError),
+    #[error(transparent)]
+    DbTryGet(#[from] DbTryGetError),
 }
 
 #[derive(Debug, Error)]
@@ -58,9 +58,9 @@ enum HandleM2AckSidechainError {
     #[error(transparent)]
     DbDelete(#[from] DbDeleteError),
     #[error(transparent)]
-    DbGet(#[from] DbGetError),
-    #[error(transparent)]
     DbPut(#[from] DbPutError),
+    #[error(transparent)]
+    DbTryGet(#[from] DbTryGetError),
 }
 
 #[derive(Debug, Error)]
@@ -70,15 +70,15 @@ enum HandleFailedSidechainProposalsError {
     #[error(transparent)]
     DbIter(#[from] DbIterError),
     #[error(transparent)]
-    DbGet(#[from] DbGetError),
+    DbTryGet(#[from] DbTryGetError),
 }
 
 #[derive(Debug, Error)]
 enum HandleM3ProposeBundleError {
     #[error(transparent)]
-    DbGet(#[from] DbGetError),
-    #[error(transparent)]
     DbPut(#[from] DbPutError),
+    #[error(transparent)]
+    DbTryGet(#[from] DbTryGetError),
     #[error(
         "Cannot propose bundle; sidechain slot {} is inactive",
         .sidechain_number.0
@@ -89,9 +89,9 @@ enum HandleM3ProposeBundleError {
 #[derive(Debug, Error)]
 enum HandleM4VotesError {
     #[error(transparent)]
-    DbGet(#[from] DbGetError),
-    #[error(transparent)]
     DbPut(#[from] DbPutError),
+    #[error(transparent)]
+    DbTryGet(#[from] DbTryGetError),
 }
 
 #[derive(Debug, Error)]
@@ -111,9 +111,9 @@ enum HandleFailedM6IdsError {
 #[derive(Debug, Error)]
 enum HandleM5M6Error {
     #[error(transparent)]
-    DbGet(#[from] DbGetError),
-    #[error(transparent)]
     DbPut(#[from] DbPutError),
+    #[error(transparent)]
+    DbTryGet(#[from] DbTryGetError),
     #[error("Invalid M6")]
     InvalidM6,
     #[error("Old Ctip for sidechain {} is unspent", .sidechain_number.0)]
@@ -171,9 +171,9 @@ enum InitialSyncError {
     #[error("Failed to connect block")]
     ConnectBlock(#[from] ConnectBlockError),
     #[error(transparent)]
-    DbGet(#[from] DbGetError),
-    #[error(transparent)]
     DbPut(#[from] DbPutError),
+    #[error(transparent)]
+    DbTryGet(#[from] DbTryGetError),
     #[error("Failed to decode block hash hex: `{block_hash_hex}`")]
     DecodeBlockHashHex {
         block_hash_hex: String,
@@ -207,7 +207,7 @@ fn handle_m1_propose_sidechain(
     let data_hash: Hash256 = sha256d(&data);
     if dbs
         .data_hash_to_sidechain_proposal
-        .get(rwtxn, &data_hash)?
+        .try_get(rwtxn, &data_hash)?
         .is_some()
     {
         // If a proposal with the same data_hash already exists,
@@ -239,7 +239,9 @@ fn handle_m2_ack_sidechain(
     sidechain_number: SidechainNumber,
     data_hash: [u8; 32],
 ) -> Result<(), HandleM2AckSidechainError> {
-    let sidechain_proposal = dbs.data_hash_to_sidechain_proposal.get(rwtxn, &data_hash)?;
+    let sidechain_proposal = dbs
+        .data_hash_to_sidechain_proposal
+        .try_get(rwtxn, &data_hash)?;
     let Some(mut sidechain_proposal) = sidechain_proposal else {
         return Ok(());
     };
@@ -254,7 +256,7 @@ fn handle_m2_ack_sidechain(
 
     let sidechain_slot_is_used = dbs
         .sidechain_number_to_sidechain
-        .get(rwtxn, &sidechain_number)?
+        .try_get(rwtxn, &sidechain_number)?
         .is_some();
 
     let new_sidechain_activated = {
@@ -302,7 +304,7 @@ fn handle_failed_sidechain_proposals(
             let sidechain_proposal_age = height - sidechain_proposal.proposal_height;
             let sidechain_slot_is_used = dbs
                 .sidechain_number_to_sidechain
-                .get(rwtxn, &sidechain_proposal.sidechain_number)?
+                .try_get(rwtxn, &sidechain_proposal.sidechain_number)?
                 .is_some();
             // FIXME: Do we need to check that the vote_count is below the threshold, or is it
             // enough to check that the max age was exceeded?
@@ -332,14 +334,14 @@ fn handle_m3_propose_bundle(
 ) -> Result<(), HandleM3ProposeBundleError> {
     if dbs
         .sidechain_number_to_sidechain
-        .get(rwtxn, &sidechain_number)?
+        .try_get(rwtxn, &sidechain_number)?
         .is_none()
     {
         return Err(HandleM3ProposeBundleError::InactiveSidechain { sidechain_number });
     }
     let pending_m6ids = dbs
         .sidechain_number_to_pending_m6ids
-        .get(rwtxn, &sidechain_number)?;
+        .try_get(rwtxn, &sidechain_number)?;
     let mut pending_m6ids = pending_m6ids.unwrap_or_default();
     let pending_m6id = PendingM6id {
         m6id,
@@ -365,7 +367,7 @@ fn handle_m4_votes(
         }
         let pending_m6ids = dbs
             .sidechain_number_to_pending_m6ids
-            .get(rwtxn, &sidechain_number)?;
+            .try_get(rwtxn, &sidechain_number)?;
         let Some(mut pending_m6ids) = pending_m6ids else {
             continue;
         };
@@ -479,7 +481,10 @@ fn handle_m5_m6(
         }
     };
     let old_total_value = {
-        if let Some(old_ctip) = dbs.sidechain_number_to_ctip.get(rwtxn, &sidechain_number)? {
+        if let Some(old_ctip) = dbs
+            .sidechain_number_to_ctip
+            .try_get(rwtxn, &sidechain_number)?
+        {
             let old_ctip_found = transaction
                 .input
                 .iter()
@@ -507,7 +512,7 @@ fn handle_m5_m6(
         let m6id = m6_to_id(transaction, old_total_value.to_sat());
         if let Some(pending_m6ids) = dbs
             .sidechain_number_to_pending_m6ids
-            .get(rwtxn, &sidechain_number)?
+            .try_get(rwtxn, &sidechain_number)?
         {
             for pending_m6id in &pending_m6ids {
                 if pending_m6id.m6id == m6id
@@ -536,7 +541,7 @@ fn handle_m5_m6(
     }
     let mut treasury_utxo_count = dbs
         .sidechain_number_to_treasury_utxo_count
-        .get(rwtxn, &sidechain_number)?
+        .try_get(rwtxn, &sidechain_number)?
         .unwrap_or(0);
     // Sequence numbers begin at 0, so the total number of treasury utxos in the database
     // gives us the *next* sequence number.
@@ -788,7 +793,10 @@ fn initial_sync(
     main_client: &Client,
 ) -> Result<(), InitialSyncError> {
     let mut rwtxn = dbs.write_txn()?;
-    let mut height = dbs.current_block_height.get(&rwtxn, &UnitKey)?.unwrap_or(0);
+    let mut height = dbs
+        .current_block_height
+        .try_get(&rwtxn, &UnitKey)?
+        .unwrap_or(0);
     let main_block_height: u32 = main_client
         .send_request("getblockcount", &[])
         .map_err(|err| InitialSyncError::Rpc {
@@ -856,7 +864,7 @@ fn task_loop_once(
     let mut txn = dbs.write_txn().into_diagnostic()?;
     let mut height = dbs
         .current_block_height
-        .get(&txn, &UnitKey)
+        .try_get(&txn, &UnitKey)
         .into_diagnostic()?
         .unwrap_or(0);
     let main_block_height: u32 = main_client
