@@ -4,36 +4,55 @@ use serde::{Deserialize, Serialize};
 
 pub type Hash256 = [u8; 32];
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[repr(transparent)]
+#[serde(transparent)]
+pub struct SidechainNumber(pub u8);
+
+impl From<u8> for SidechainNumber {
+    #[inline(always)]
+    fn from(sidechain_number: u8) -> Self {
+        Self(sidechain_number)
+    }
+}
+
+impl From<SidechainNumber> for u8 {
+    #[inline(always)]
+    fn from(sidechain_number: SidechainNumber) -> Self {
+        sidechain_number.0
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Ctip {
     pub outpoint: OutPoint,
     pub value: Amount,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Sidechain {
-    pub sidechain_number: u8,
+    pub sidechain_number: SidechainNumber,
     pub data: Vec<u8>,
     pub vote_count: u16,
     pub proposal_height: u32,
     pub activation_height: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct SidechainProposal {
-    pub sidechain_number: u8,
+    pub sidechain_number: SidechainNumber,
     pub data: Vec<u8>,
     pub vote_count: u16,
     pub proposal_height: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PendingM6id {
     pub m6id: Hash256,
     pub vote_count: u16,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TreasuryUtxo {
     pub outpoint: OutPoint,
     pub address: Option<Vec<u8>>,
@@ -43,7 +62,7 @@ pub struct TreasuryUtxo {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Deposit {
-    pub sidechain_id: u8,
+    pub sidechain_id: SidechainNumber,
     pub sequence_number: u64,
     pub outpoint: OutPoint,
     pub output: TxOut,
@@ -67,7 +86,7 @@ pub enum WithdrawalBundleEventKind {
 
 #[derive(Clone, Debug)]
 pub struct WithdrawalBundleEvent {
-    pub sidechain_id: u8,
+    pub sidechain_id: SidechainNumber,
     pub m6id: Hash256,
     pub kind: WithdrawalBundleEventKind,
 }
@@ -77,7 +96,7 @@ pub struct BlockInfo {
     pub deposits: Vec<Deposit>,
     pub withdrawal_bundle_events: Vec<WithdrawalBundleEvent>,
     /// Sequential map of sidechain IDs to BMM commitments
-    pub bmm_commitments: LinkedHashMap<u8, Hash256>,
+    pub bmm_commitments: LinkedHashMap<SidechainNumber, Hash256>,
 }
 
 #[derive(Clone, Debug)]

@@ -8,7 +8,7 @@ use tokio::task::{spawn, JoinHandle};
 
 use crate::{
     cli::Config,
-    types::{Ctip, Event, Hash256, Sidechain, SidechainProposal},
+    types::{Ctip, Event, Hash256, Sidechain, SidechainNumber, SidechainProposal},
 };
 
 mod dbs;
@@ -91,7 +91,7 @@ impl Bip300 {
 
     pub fn get_ctip_sequence_number(
         &self,
-        sidechain_number: u8,
+        sidechain_number: SidechainNumber,
     ) -> Result<Option<u64>, miette::Report> {
         let rotxn = self.dbs.read_txn().into_diagnostic()?;
         let treasury_utxo_count = self
@@ -107,7 +107,10 @@ impl Bip300 {
         Ok(sequence_number)
     }
 
-    pub fn get_ctip(&self, sidechain_number: u8) -> Result<Option<Ctip>, miette::Report> {
+    pub fn get_ctip(
+        &self,
+        sidechain_number: SidechainNumber,
+    ) -> Result<Option<Ctip>, miette::Report> {
         let txn = self.dbs.read_txn().into_diagnostic()?;
         let ctip = self
             .dbs

@@ -1,26 +1,32 @@
-use crate::proto::{
-    self,
-    mainchain::{
-        get_ctip_response::Ctip, get_sidechain_proposals_response::SidechainProposal,
-        get_sidechains_response::SidechainInfo, server::MainchainService,
-        BroadcastWithdrawalBundleRequest, BroadcastWithdrawalBundleResponse,
-        CreateBmmCriticalDataTransactionRequest, CreateBmmCriticalDataTransactionResponse,
-        CreateDepositTransactionRequest, CreateDepositTransactionResponse, CreateNewAddressRequest,
-        CreateNewAddressResponse, GenerateBlocksRequest, GenerateBlocksResponse,
-        GetBlockHeaderInfoRequest, GetBlockHeaderInfoResponse, GetBlockInfoRequest,
-        GetBlockInfoResponse, GetBmmHStarCommitmentsRequest, GetBmmHStarCommitmentsResponse,
-        GetChainInfoRequest, GetChainInfoResponse, GetChainTipRequest, GetChainTipResponse,
-        GetCoinbasePsbtRequest, GetCoinbasePsbtResponse, GetCtipRequest, GetCtipResponse,
-        GetSidechainProposalsRequest, GetSidechainProposalsResponse, GetSidechainsRequest,
-        GetSidechainsResponse, GetTwoWayPegDataRequest, GetTwoWayPegDataResponse,
-        SubscribeEventsRequest, SubscribeEventsResponse,
+use crate::{
+    proto::{
+        self,
+        mainchain::{
+            get_ctip_response::Ctip, get_sidechain_proposals_response::SidechainProposal,
+            get_sidechains_response::SidechainInfo, server::MainchainService,
+            BroadcastWithdrawalBundleRequest, BroadcastWithdrawalBundleResponse,
+            CreateBmmCriticalDataTransactionRequest, CreateBmmCriticalDataTransactionResponse,
+            CreateDepositTransactionRequest, CreateDepositTransactionResponse,
+            CreateNewAddressRequest, CreateNewAddressResponse, GenerateBlocksRequest,
+            GenerateBlocksResponse, GetBlockHeaderInfoRequest, GetBlockHeaderInfoResponse,
+            GetBlockInfoRequest, GetBlockInfoResponse, GetBmmHStarCommitmentsRequest,
+            GetBmmHStarCommitmentsResponse, GetChainInfoRequest, GetChainInfoResponse,
+            GetChainTipRequest, GetChainTipResponse, GetCoinbasePsbtRequest,
+            GetCoinbasePsbtResponse, GetCtipRequest, GetCtipResponse, GetSidechainProposalsRequest,
+            GetSidechainProposalsResponse, GetSidechainsRequest, GetSidechainsResponse,
+            GetTwoWayPegDataRequest, GetTwoWayPegDataResponse, SubscribeEventsRequest,
+            SubscribeEventsResponse,
+        },
     },
+    types::SidechainNumber,
 };
 
+use async_broadcast::RecvError;
 use bip300301_messages::{
     bitcoin::{self, absolute::Height, hashes::Hash, Amount, Transaction, TxOut},
     CoinbaseMessage,
 };
+use futures::{stream::BoxStream, StreamExt, TryStreamExt as _};
 use miette::Result;
 use tonic::{Request, Response, Status};
 
@@ -181,15 +187,17 @@ impl MainchainService for Bip300 {
         request: tonic::Request<GetCtipRequest>,
     ) -> Result<tonic::Response<GetCtipResponse>, tonic::Status> {
         let GetCtipRequest { sidechain_number } = request.into_inner();
-        let sidechain_number: u8 = {
+        let sidechain_number: SidechainNumber = {
             let sidechain_number: u32 = sidechain_number
                 .ok_or_else(|| missing_field::<GetCtipRequest>("sidechain_number"))?;
-            sidechain_number.try_into().map_err(|_| {
-                invalid_field_value::<GetCtipRequest>(
-                    "sidechain_number",
-                    &sidechain_number.to_string(),
-                )
-            })?
+            <u8 as TryFrom<_>>::try_from(sidechain_number)
+                .map_err(|_| {
+                    invalid_field_value::<GetCtipRequest>(
+                        "sidechain_number",
+                        &sidechain_number.to_string(),
+                    )
+                })?
+                .into()
         };
         let ctip = self
             .get_ctip(sidechain_number)
@@ -257,7 +265,7 @@ impl MainchainService for Bip300 {
                     },
                 )| {
                     SidechainProposal {
-                        sidechain_number: sidechain_number as u32,
+                        sidechain_number: u8::from(sidechain_number) as u32,
                         data,
                         data_hash: data_hash.to_vec(),
                         vote_count: vote_count as u32,
@@ -292,7 +300,7 @@ impl MainchainService for Bip300 {
                     activation_height,
                 } = sidechain;
                 SidechainInfo {
-                    sidechain_number: sidechain_number as u32,
+                    sidechain_number: u8::from(sidechain_number) as u32,
                     data,
                     vote_count: vote_count as u32,
                     proposal_height,
@@ -346,26 +354,39 @@ impl MainchainService for Bip300 {
         todo!()
     }
 
-    type SubscribeEventsStream =
-        futures::channel::mpsc::UnboundedReceiver<Result<SubscribeEventsResponse, tonic::Status>>;
+    type SubscribeEventsStream = BoxStream<'static, Result<SubscribeEventsResponse, tonic::Status>>;
 
     async fn subscribe_events(
         &self,
         request: tonic::Request<SubscribeEventsRequest>,
     ) -> Result<tonic::Response<Self::SubscribeEventsStream>, tonic::Status> {
         let SubscribeEventsRequest { sidechain_id } = request.into_inner();
-        let _sidechain_id: u8 = {
+        let sidechain_id: SidechainNumber = {
             let sidechain_id: u32 = sidechain_id
                 .ok_or_else(|| missing_field::<GetTwoWayPegDataRequest>("sidechain_id"))?;
-            sidechain_id.try_into().map_err(|_| {
-                invalid_field_value::<GetTwoWayPegDataRequest>(
-                    "sidechain_id",
-                    &sidechain_id.to_string(),
-                )
-            })?
+            <u8 as TryFrom<_>>::try_from(sidechain_id)
+                .map_err(|_| {
+                    invalid_field_value::<GetTwoWayPegDataRequest>(
+                        "sidechain_id",
+                        &sidechain_id.to_string(),
+                    )
+                })?
+                .into()
         };
-        // FIXME: implement
-        todo!()
+        let stream = futures::stream::try_unfold(self.subscribe_events(), |mut receiver| async {
+            match receiver.recv_direct().await {
+                Ok(event) => Ok(Some((event, receiver))),
+                Err(RecvError::Closed) => Ok(None),
+                Err(RecvError::Overflowed(_)) => Err(tonic::Status::resource_exhausted(
+                    "Events stream closed due to overflow",
+                )),
+            }
+        })
+        .map_ok(move |event| SubscribeEventsResponse {
+            event: Some((sidechain_id, event).into()),
+        })
+        .boxed();
+        Ok(tonic::Response::new(stream))
     }
 
     /*

@@ -83,10 +83,14 @@ impl Error {
 pub mod mainchain {
     tonic::include_proto!("cusf.mainchain.v1");
 
+    use bip300301_messages::bitcoin::hashes::Hash;
     #[allow(unused_imports)]
     pub use mainchain_service_server::{
         self as server, MainchainService as Service, MainchainServiceServer as Server,
     };
+    use subscribe_events_response::event::{ConnectBlock, DisconnectBlock};
+
+    use crate::types::SidechainNumber;
 
     impl TryFrom<get_coinbase_psbt_request::ProposeSidechain> for bip300301_messages::CoinbaseMessage {
         type Error = super::Error;
@@ -283,6 +287,156 @@ pub mod mainchain {
             ack_bundles: get_coinbase_psbt_request::AckBundles,
         ) -> Result<Self, Self::Error> {
             ack_bundles.try_into().map(Self::M4AckBundles)
+        }
+    }
+
+    impl From<crate::types::HeaderInfo> for BlockHeaderInfo {
+        fn from(header_info: crate::types::HeaderInfo) -> Self {
+            Self {
+                block_hash: header_info.block_hash.into(),
+                prev_block_hash: header_info.prev_block_hash.into(),
+                height: header_info.height,
+                work: header_info.work.into(),
+            }
+        }
+    }
+
+    impl From<bip300301_messages::bitcoin::OutPoint> for OutPoint {
+        fn from(outpoint: bip300301_messages::bitcoin::OutPoint) -> Self {
+            Self {
+                txid: outpoint.txid.to_raw_hash().as_byte_array().to_vec(),
+                vout: outpoint.vout,
+            }
+        }
+    }
+
+    impl From<bip300301_messages::bitcoin::TxOut> for Output {
+        fn from(output: bip300301_messages::bitcoin::TxOut) -> Self {
+            Self {
+                address: output.script_pubkey.into_bytes(),
+                value_sats: output.value.to_sat(),
+            }
+        }
+    }
+
+    impl From<crate::types::Deposit> for (SidechainNumber, Deposit) {
+        fn from(deposit: crate::types::Deposit) -> Self {
+            let crate::types::Deposit {
+                sidechain_id,
+                sequence_number,
+                outpoint,
+                output,
+            } = deposit;
+            let deposit = Deposit {
+                sequence_number: sequence_number,
+                outpoint: Some(outpoint.into()),
+                output: Some(output.into()),
+            };
+            (sidechain_id, deposit)
+        }
+    }
+
+    impl From<crate::types::WithdrawalBundleEventKind> for WithdrawalBundleEventType {
+        fn from(kind: crate::types::WithdrawalBundleEventKind) -> Self {
+            match kind {
+                crate::types::WithdrawalBundleEventKind::Failed => {
+                    WithdrawalBundleEventType::Failed
+                }
+                crate::types::WithdrawalBundleEventKind::Submitted => {
+                    WithdrawalBundleEventType::Submitted
+                }
+                crate::types::WithdrawalBundleEventKind::Succeeded => {
+                    WithdrawalBundleEventType::Succeded
+                }
+            }
+        }
+    }
+
+    impl From<crate::types::WithdrawalBundleEvent> for (SidechainNumber, WithdrawalBundleEvent) {
+        fn from(event: crate::types::WithdrawalBundleEvent) -> Self {
+            let crate::types::WithdrawalBundleEvent {
+                sidechain_id,
+                m6id,
+                kind,
+            } = event;
+            let withdrawal_bundle_event_type = WithdrawalBundleEventType::from(kind) as i32;
+            let event = WithdrawalBundleEvent {
+                m6id: m6id.to_vec(),
+                withdrawal_bundle_event_type,
+            };
+            (sidechain_id, event)
+        }
+    }
+
+    /// Given a sidechain number, returns the corresponding block info
+    impl From<(SidechainNumber, crate::types::BlockInfo)> for BlockInfo {
+        fn from(
+            (sidechain_number, block_info): (SidechainNumber, crate::types::BlockInfo),
+        ) -> Self {
+            let deposits = block_info
+                .deposits
+                .into_iter()
+                .filter_map(|deposit| {
+                    let (deposit_sidechain_number, deposit) = deposit.into();
+                    if deposit_sidechain_number == sidechain_number {
+                        Some(deposit)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let withdrawal_bundle_events = block_info
+                .withdrawal_bundle_events
+                .into_iter()
+                .filter_map(|event| {
+                    let (event_sidechain_number, event) = event.into();
+                    if event_sidechain_number == sidechain_number {
+                        Some(event)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let bmm_commitment = block_info
+                .bmm_commitments
+                .get(&sidechain_number)
+                .map(|commitment| commitment.to_vec());
+            Self {
+                deposits,
+                withdrawal_bundle_events,
+                bmm_commitment,
+            }
+        }
+    }
+
+    impl From<(SidechainNumber, crate::types::Event)> for subscribe_events_response::event::Event {
+        fn from((sidechain_number, event): (SidechainNumber, crate::types::Event)) -> Self {
+            match event {
+                crate::types::Event::ConnectBlock {
+                    header_info,
+                    block_info,
+                } => {
+                    let event = ConnectBlock {
+                        header_info: Some(header_info.into()),
+                        block_info: Some((sidechain_number, block_info).into()),
+                    };
+                    Self::ConnectBlock(event)
+                }
+                crate::types::Event::DisconnectBlock { block_hash } => {
+                    let event = DisconnectBlock {
+                        block_hash: block_hash.to_vec(),
+                    };
+                    Self::DisconnectBlock(event)
+                }
+            }
+        }
+    }
+
+    impl From<(SidechainNumber, crate::types::Event)> for subscribe_events_response::Event {
+        fn from((sidechain_number, event): (SidechainNumber, crate::types::Event)) -> Self {
+            Self {
+                event: Some((sidechain_number, event).into()),
+            }
         }
     }
 }

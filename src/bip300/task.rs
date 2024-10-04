@@ -24,7 +24,8 @@ use crate::{
     cli::Config,
     types::{
         BlockInfo, Ctip, Deposit, Event, Hash256, HeaderInfo, PendingM6id, Sidechain,
-        SidechainProposal, TreasuryUtxo, WithdrawalBundleEvent, WithdrawalBundleEventKind,
+        SidechainNumber, SidechainProposal, TreasuryUtxo, WithdrawalBundleEvent,
+        WithdrawalBundleEventKind,
     },
 };
 
@@ -78,8 +79,11 @@ enum HandleM3ProposeBundleError {
     DbGet(#[from] DbGetError),
     #[error(transparent)]
     DbPut(#[from] DbPutError),
-    #[error("Cannot propose bundle; sidechain slot {sidechain_number} is inactive")]
-    InactiveSidechain { sidechain_number: u8 },
+    #[error(
+        "Cannot propose bundle; sidechain slot {} is inactive",
+        .sidechain_number.0
+    )]
+    InactiveSidechain { sidechain_number: SidechainNumber },
 }
 
 #[derive(Debug, Error)]
@@ -112,8 +116,8 @@ enum HandleM5M6Error {
     DbPut(#[from] DbPutError),
     #[error("Invalid M6")]
     InvalidM6,
-    #[error("Old Ctip for sidechain {sidechain_number} is unspent")]
-    OldCtipUnspent { sidechain_number: u8 },
+    #[error("Old Ctip for sidechain {} is unspent", .sidechain_number.0)]
+    OldCtipUnspent { sidechain_number: SidechainNumber },
 }
 
 #[derive(Debug, Error)]
@@ -150,8 +154,8 @@ enum ConnectBlockError {
     M5M6(#[from] HandleM5M6Error),
     #[error("Error handling M8")]
     M8(#[from] HandleM8Error),
-    #[error("Multiple blocks BMM'd in sidechain slot {sidechain_number}")]
-    MultipleBmmBlocks { sidechain_number: u8 },
+    #[error("Multiple blocks BMM'd in sidechain slot {}", .sidechain_number.0)]
+    MultipleBmmBlocks { sidechain_number: SidechainNumber },
 }
 
 #[derive(Debug, Error)]
@@ -195,7 +199,7 @@ fn handle_m1_propose_sidechain(
     rwtxn: &mut RwTxn,
     dbs: &Dbs,
     proposal_height: u32,
-    sidechain_number: u8,
+    sidechain_number: SidechainNumber,
     data: Vec<u8>,
 ) -> Result<(), HandleM1ProposeSidechainError> {
     let data_hash: Hash256 = sha256d(&data);
@@ -230,7 +234,7 @@ fn handle_m2_ack_sidechain(
     rwtxn: &mut RwTxn,
     dbs: &Dbs,
     height: u32,
-    sidechain_number: u8,
+    sidechain_number: SidechainNumber,
     data_hash: [u8; 32],
 ) -> Result<(), HandleM2AckSidechainError> {
     let sidechain_proposal = dbs.data_hash_to_sidechain_proposal.get(rwtxn, &data_hash)?;
@@ -263,8 +267,9 @@ fn handle_m2_ack_sidechain(
 
     if new_sidechain_activated {
         println!(
-            "sidechain {} in slot {sidechain_number} was activated",
+            "sidechain {} in slot {} was activated",
             String::from_utf8_lossy(&sidechain_proposal.data),
+            sidechain_number.0
         );
         let sidechain = Sidechain {
             sidechain_number,
@@ -320,7 +325,7 @@ fn handle_failed_sidechain_proposals(
 fn handle_m3_propose_bundle(
     rwtxn: &mut RwTxn,
     dbs: &Dbs,
-    sidechain_number: u8,
+    sidechain_number: SidechainNumber,
     m6id: [u8; 32],
 ) -> Result<(), HandleM3ProposeBundleError> {
     if dbs
@@ -351,13 +356,14 @@ fn handle_m4_votes(
     upvotes: &[u16],
 ) -> Result<(), HandleM4VotesError> {
     for (sidechain_number, vote) in upvotes.iter().enumerate() {
+        let sidechain_number = (sidechain_number as u8).into();
         let vote = *vote;
         if vote == ABSTAIN_TWO_BYTES {
             continue;
         }
         let pending_m6ids = dbs
             .sidechain_number_to_pending_m6ids
-            .get(rwtxn, &(sidechain_number as u8))?;
+            .get(rwtxn, &sidechain_number)?;
         let Some(mut pending_m6ids) = pending_m6ids else {
             continue;
         };
@@ -370,11 +376,9 @@ fn handle_m4_votes(
         } else if let Some(pending_m6id) = pending_m6ids.get_mut(vote as usize) {
             pending_m6id.vote_count += 1;
         }
-        let () = dbs.sidechain_number_to_pending_m6ids.put(
-            rwtxn,
-            &(sidechain_number as u8),
-            &pending_m6ids,
-        )?;
+        let () =
+            dbs.sidechain_number_to_pending_m6ids
+                .put(rwtxn, &sidechain_number, &pending_m6ids)?;
     }
     Ok(())
 }
@@ -405,7 +409,7 @@ fn handle_m4_ack_bundles(
 fn handle_failed_m6ids(
     rwtxn: &mut RwTxn,
     dbs: &Dbs,
-) -> Result<LinkedHashSet<(u8, [u8; 32])>, HandleFailedM6IdsError> {
+) -> Result<LinkedHashSet<(SidechainNumber, [u8; 32])>, HandleFailedM6IdsError> {
     let mut failed_m6ids = LinkedHashSet::new();
     let mut updated_slots = LinkedHashMap::new();
     let () = dbs
@@ -437,7 +441,7 @@ fn handle_failed_m6ids(
 }
 
 /// Deposit or (sidechain_id, m6id)
-type DepositOrSuccessfulWithdrawal = Either<Deposit, (u8, [u8; 32])>;
+type DepositOrSuccessfulWithdrawal = Either<Deposit, (SidechainNumber, [u8; 32])>;
 
 fn handle_m5_m6(
     rwtxn: &mut RwTxn,
@@ -454,6 +458,7 @@ fn handle_m5_m6(
         if let Ok((_input, sidechain_number)) =
             parse_op_drivechain(&output.script_pubkey.to_bytes())
         {
+            let sidechain_number = SidechainNumber(sidechain_number as u8);
             let new_ctip = OutPoint { txid, vout: 0 };
             let new_total_value = output.value;
 
@@ -571,7 +576,7 @@ fn handle_m5_m6(
 
 fn handle_m8(
     transaction: &Transaction,
-    accepted_bmm_requests: &LinkedHashSet<(u8, [u8; 32])>,
+    accepted_bmm_requests: &LinkedHashSet<(SidechainNumber, [u8; 32])>,
     prev_mainchain_block_hash: &[u8; 32],
 ) -> Result<(), HandleM8Error> {
     let output = &transaction.output[0];
@@ -579,7 +584,7 @@ fn handle_m8(
 
     if let Ok((_input, bmm_request)) = parse_m8_bmm_request(&script) {
         if !accepted_bmm_requests.contains(&(
-            bmm_request.sidechain_number,
+            bmm_request.sidechain_number.into(),
             bmm_request.sidechain_block_hash,
         )) {
             return Err(HandleM8Error::NotAcceptedByMiners);
@@ -618,7 +623,13 @@ fn connect_block(
                     String::from_utf8(data.clone()).into_diagnostic()?,
                 );
                 */
-                handle_m1_propose_sidechain(rwtxn, dbs, height, sidechain_number, data.clone())?;
+                handle_m1_propose_sidechain(
+                    rwtxn,
+                    dbs,
+                    height,
+                    sidechain_number.into(),
+                    data.clone(),
+                )?;
             }
             CoinbaseMessage::M2AckSidechain {
                 sidechain_number,
@@ -630,15 +641,16 @@ fn connect_block(
                     hex::encode(data_hash)
                 );
                 */
-                handle_m2_ack_sidechain(rwtxn, dbs, height, sidechain_number, data_hash)?;
+                handle_m2_ack_sidechain(rwtxn, dbs, height, sidechain_number.into(), data_hash)?;
             }
             CoinbaseMessage::M3ProposeBundle {
                 sidechain_number,
                 bundle_txid,
             } => {
+                let sidechain_number = sidechain_number.into();
                 let () = handle_m3_propose_bundle(rwtxn, dbs, sidechain_number, bundle_txid)?;
                 let event = WithdrawalBundleEvent {
-                    sidechain_id: sidechain_number,
+                    sidechain_id: sidechain_number.into(),
                     m6id: bundle_txid,
                     kind: WithdrawalBundleEventKind::Submitted,
                 };
@@ -651,6 +663,7 @@ fn connect_block(
                 sidechain_number,
                 sidechain_block_hash,
             } => {
+                let sidechain_number = sidechain_number.into();
                 if bmmed_sidechain_slots.contains(&sidechain_number) {
                     return Err(ConnectBlockError::MultipleBmmBlocks { sidechain_number });
                 }
@@ -893,7 +906,7 @@ fn task_loop_once(
     Ok(())
 }
 
-fn create_client(conf: Config) -> Result<Client, miette::Report> {
+fn create_client(conf: &Config) -> Result<Client, miette::Report> {
     if conf.node_rpc_user.is_none() != conf.node_rpc_password.is_none() {
         return Err(miette!("RPC user and password must be set together"));
     }
@@ -940,7 +953,10 @@ pub(super) async fn task(
     dbs: &Dbs,
     event_tx: &Sender<Event>,
 ) -> Result<(), miette::Report> {
-    let main_client = &create_client(conf)?;
+    let main_client = &create_client(&conf)?;
+    let zmq_sequence = crate::zmq::subscribe_sequence(&conf.node_zmq_addr_sequence)
+        .await
+        .into_diagnostic()?;
     let () = initial_sync(dbs, event_tx, main_client).into_diagnostic()?;
     let interval = interval(Duration::from_secs(1));
     IntervalStream::new(interval)

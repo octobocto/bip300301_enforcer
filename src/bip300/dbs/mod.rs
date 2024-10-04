@@ -4,7 +4,8 @@ use heed::{types::SerdeBincode, EnvOpenOptions, RoTxn};
 use thiserror::Error;
 
 use crate::types::{
-    Ctip, Deposit, Hash256, PendingM6id, Sidechain, SidechainProposal, TreasuryUtxo,
+    Ctip, Deposit, Hash256, PendingM6id, Sidechain, SidechainNumber, SidechainProposal,
+    TreasuryUtxo,
 };
 
 mod util;
@@ -44,12 +45,14 @@ pub(super) struct Dbs {
     pub _leading_by_50: Database<SerdeBincode<UnitKey>, SerdeBincode<Vec<Hash256>>>,
     pub _previous_votes: Database<SerdeBincode<UnitKey>, SerdeBincode<Vec<Hash256>>>,
     pub sidechain_number_sequence_number_to_treasury_utxo:
-        Database<SerdeBincode<(u8, u64)>, SerdeBincode<TreasuryUtxo>>,
-    pub sidechain_number_to_ctip: Database<SerdeBincode<u8>, SerdeBincode<Ctip>>,
+        Database<SerdeBincode<(SidechainNumber, u64)>, SerdeBincode<TreasuryUtxo>>,
+    pub sidechain_number_to_ctip: Database<SerdeBincode<SidechainNumber>, SerdeBincode<Ctip>>,
     pub sidechain_number_to_pending_m6ids:
-        Database<SerdeBincode<u8>, SerdeBincode<Vec<PendingM6id>>>,
-    pub sidechain_number_to_sidechain: Database<SerdeBincode<u8>, SerdeBincode<Sidechain>>,
-    pub sidechain_number_to_treasury_utxo_count: Database<SerdeBincode<u8>, SerdeBincode<u64>>,
+        Database<SerdeBincode<SidechainNumber>, SerdeBincode<Vec<PendingM6id>>>,
+    pub sidechain_number_to_sidechain:
+        Database<SerdeBincode<SidechainNumber>, SerdeBincode<Sidechain>>,
+    pub sidechain_number_to_treasury_utxo_count:
+        Database<SerdeBincode<SidechainNumber>, SerdeBincode<u64>>,
 }
 
 impl Dbs {
