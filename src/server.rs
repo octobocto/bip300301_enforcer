@@ -2,15 +2,16 @@ use crate::{
     proto::{
         self,
         mainchain::{
-            get_ctip_response::Ctip, get_sidechain_proposals_response::SidechainProposal,
+            get_bmm_h_star_commitment_response, get_ctip_response::Ctip,
+            get_sidechain_proposals_response::SidechainProposal,
             get_sidechains_response::SidechainInfo, server::MainchainService,
             BroadcastWithdrawalBundleRequest, BroadcastWithdrawalBundleResponse,
             CreateBmmCriticalDataTransactionRequest, CreateBmmCriticalDataTransactionResponse,
             CreateDepositTransactionRequest, CreateDepositTransactionResponse,
             CreateNewAddressRequest, CreateNewAddressResponse, GenerateBlocksRequest,
             GenerateBlocksResponse, GetBlockHeaderInfoRequest, GetBlockHeaderInfoResponse,
-            GetBlockInfoRequest, GetBlockInfoResponse, GetBmmHStarCommitmentsRequest,
-            GetBmmHStarCommitmentsResponse, GetChainInfoRequest, GetChainInfoResponse,
+            GetBlockInfoRequest, GetBlockInfoResponse, GetBmmHStarCommitmentRequest,
+            GetBmmHStarCommitmentResponse, GetChainInfoRequest, GetChainInfoResponse,
             GetChainTipRequest, GetChainTipResponse, GetCoinbasePsbtRequest,
             GetCoinbasePsbtResponse, GetCtipRequest, GetCtipResponse, GetSidechainProposalsRequest,
             GetSidechainProposalsResponse, GetSidechainsRequest, GetSidechainsResponse,
@@ -117,18 +118,94 @@ impl MainchainService for Bip300 {
 
     async fn get_block_info(
         &self,
-        _request: tonic::Request<GetBlockInfoRequest>,
+        request: tonic::Request<GetBlockInfoRequest>,
     ) -> Result<tonic::Response<GetBlockInfoResponse>, tonic::Status> {
-        // FIXME: implement
-        todo!()
+        let GetBlockInfoRequest {
+            block_hash,
+            sidechain_id,
+        } = request.into_inner();
+        let block_hash = block_hash
+            .ok_or_else(|| missing_field::<GetBlockInfoRequest>("block_hash"))?
+            .try_into()
+            .map_err(|block_hash| {
+                invalid_field_value::<GetBlockInfoRequest>("block_hash", &hex::encode(block_hash))
+            })?;
+        let block_hash = BlockHash::from_byte_array(block_hash);
+        let sidechain_id: SidechainNumber = {
+            let sidechain_id: u32 =
+                sidechain_id.ok_or_else(|| missing_field::<GetBlockInfoRequest>("sidechain_id"))?;
+            <u8 as TryFrom<_>>::try_from(sidechain_id)
+                .map_err(|_| {
+                    invalid_field_value::<GetBlockInfoRequest>(
+                        "sidechain_id",
+                        &sidechain_id.to_string(),
+                    )
+                })?
+                .into()
+        };
+        let header_info = self
+            .get_header_info(&block_hash)
+            .map_err(|err| tonic::Status::from_error(Box::new(err)))?;
+        let block_info = self
+            .get_block_info(&block_hash)
+            .map_err(|err| tonic::Status::from_error(Box::new(err)))?;
+        let resp = GetBlockInfoResponse {
+            header_info: Some(header_info.into()),
+            block_info: Some((sidechain_id, block_info).into()),
+        };
+        Ok(tonic::Response::new(resp))
     }
 
-    async fn get_bmm_h_star_commitments(
+    async fn get_bmm_h_star_commitment(
         &self,
-        _request: tonic::Request<GetBmmHStarCommitmentsRequest>,
-    ) -> Result<tonic::Response<GetBmmHStarCommitmentsResponse>, tonic::Status> {
-        // FIXME: implement
-        todo!()
+        request: tonic::Request<GetBmmHStarCommitmentRequest>,
+    ) -> Result<tonic::Response<GetBmmHStarCommitmentResponse>, tonic::Status> {
+        let GetBmmHStarCommitmentRequest {
+            block_hash,
+            sidechain_id,
+        } = request.into_inner();
+        let block_hash = block_hash
+            .ok_or_else(|| missing_field::<GetBmmHStarCommitmentRequest>("block_hash"))?
+            .try_into()
+            .map_err(|block_hash| {
+                invalid_field_value::<GetBmmHStarCommitmentRequest>(
+                    "block_hash",
+                    &hex::encode(block_hash),
+                )
+            })?;
+        let block_hash = BlockHash::from_byte_array(block_hash);
+        let sidechain_id: SidechainNumber = {
+            let sidechain_id: u32 = sidechain_id
+                .ok_or_else(|| missing_field::<GetBmmHStarCommitmentRequest>("sidechain_id"))?;
+            <u8 as TryFrom<_>>::try_from(sidechain_id)
+                .map_err(|_| {
+                    invalid_field_value::<GetBmmHStarCommitmentRequest>(
+                        "sidechain_id",
+                        &sidechain_id.to_string(),
+                    )
+                })?
+                .into()
+        };
+        let bmm_commitments = self
+            .try_get_bmm_commitments(&block_hash)
+            .map_err(|err| tonic::Status::from_error(Box::new(err)))?;
+        let res = match bmm_commitments {
+            None => get_bmm_h_star_commitment_response::Result::BlockNotFound(
+                get_bmm_h_star_commitment_response::BlockNotFoundError {
+                    block_hash: block_hash.to_byte_array().to_vec(),
+                },
+            ),
+            Some(bmm_commitments) => {
+                let commitment = bmm_commitments
+                    .get(&sidechain_id)
+                    .map(|commitment| commitment.to_vec());
+                get_bmm_h_star_commitment_response::Result::Commitment(
+                    get_bmm_h_star_commitment_response::Commitment { commitment },
+                )
+            }
+        };
+        let resp = GetBmmHStarCommitmentResponse { result: Some(res) };
+        Ok(tonic::Response::new(resp))
     }
 
     async fn get_chain_info(

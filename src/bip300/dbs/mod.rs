@@ -92,6 +92,14 @@ pub(crate) enum TryGetBlockInfoError {
 }
 
 #[derive(Debug, Error)]
+pub(crate) enum GetBlockInfoError {
+    #[error("Missing block info for block hash `{block_hash}`")]
+    MissingValue { block_hash: BlockHash },
+    #[error(transparent)]
+    TryGetBlockInfo(#[from] TryGetBlockInfoError),
+}
+
+#[derive(Debug, Error)]
 pub(crate) enum TryGetTwoWayPegDataSingleError {
     #[error(transparent)]
     InconsistentDbs(#[from] InconsistentDbsError),
@@ -301,6 +309,17 @@ impl Dbs {
             bmm_commitments,
         };
         Ok(Some(block_info))
+    }
+
+    pub fn get_block_info(
+        &self,
+        rotxn: &RoTxn,
+        block_hash: &BlockHash,
+    ) -> Result<BlockInfo, GetBlockInfoError> {
+        self.try_get_block_info(rotxn, block_hash)?
+            .ok_or_else(|| GetBlockInfoError::MissingValue {
+                block_hash: *block_hash,
+            })
     }
 
     /// Get two way peg data for a single block

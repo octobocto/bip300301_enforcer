@@ -11,8 +11,8 @@ use tokio::task::{spawn, JoinHandle};
 use crate::{
     cli::Config,
     types::{
-        Ctip, Event, Hash256, HeaderInfo, Sidechain, SidechainNumber, SidechainProposal,
-        TwoWayPegData,
+        BlockInfo, BmmCommitments, Ctip, Event, Hash256, HeaderInfo, Sidechain, SidechainNumber,
+        SidechainProposal, TwoWayPegData,
     },
 };
 
@@ -20,6 +20,14 @@ mod dbs;
 mod task;
 
 use dbs::{CreateDbsError, Dbs};
+
+#[derive(Debug, Error)]
+pub enum GetBlockInfoError {
+    #[error(transparent)]
+    ReadTxn(#[from] dbs::ReadTxnError),
+    #[error(transparent)]
+    GetBlockInfo(#[from] dbs::GetBlockInfoError),
+}
 
 #[derive(Debug, Error)]
 pub enum GetHeaderInfoError {
@@ -35,6 +43,14 @@ pub enum GetTwoWayPegDataError {
     ReadTxn(#[from] dbs::ReadTxnError),
     #[error(transparent)]
     GetTwoWayPegData(#[from] dbs::GetTwoWayPegDataError),
+}
+
+#[derive(Debug, Error)]
+pub enum TryGetBmmCommitmentsError {
+    #[error(transparent)]
+    ReadTxn(#[from] dbs::ReadTxnError),
+    #[error(transparent)]
+    DbTryGet(#[from] dbs::DbTryGetError),
 }
 
 #[derive(Clone)]
@@ -141,6 +157,12 @@ impl Bip300 {
         Ok(ctip)
     }
 
+    pub fn get_block_info(&self, block_hash: &BlockHash) -> Result<BlockInfo, GetBlockInfoError> {
+        let rotxn = self.dbs.read_txn()?;
+        let res = self.dbs.get_block_info(&rotxn, &block_hash)?;
+        Ok(res)
+    }
+
     pub fn get_header_info(
         &self,
         block_hash: &BlockHash,
@@ -159,6 +181,18 @@ impl Bip300 {
         let res = self
             .dbs
             .get_two_way_peg_data(&rotxn, start_block, end_block)?;
+        Ok(res)
+    }
+
+    pub fn try_get_bmm_commitments(
+        &self,
+        block_hash: &BlockHash,
+    ) -> Result<Option<BmmCommitments>, TryGetBmmCommitmentsError> {
+        let rotxn = self.dbs.read_txn()?;
+        let res = self
+            .dbs
+            .block_hash_to_bmm_commitments
+            .try_get(&rotxn, block_hash)?;
         Ok(res)
     }
 
