@@ -218,10 +218,19 @@ impl MainchainService for Bip300 {
 
     async fn get_chain_tip(
         &self,
-        _request: tonic::Request<GetChainTipRequest>,
+        request: tonic::Request<GetChainTipRequest>,
     ) -> Result<tonic::Response<GetChainTipResponse>, tonic::Status> {
-        // FIXME: implement
-        todo!()
+        let GetChainTipRequest {} = request.into_inner();
+        let tip_hash = self
+            .get_mainchain_tip()
+            .map_err(|err| tonic::Status::from_error(err.into()))?;
+        let header_info = self
+            .get_header_info(&tip_hash)
+            .map_err(|err| tonic::Status::from_error(err.into()))?;
+        let resp = GetChainTipResponse {
+            block_header_info: Some(header_info.into()),
+        };
+        Ok(tonic::Response::new(resp))
     }
 
     async fn get_coinbase_psbt(

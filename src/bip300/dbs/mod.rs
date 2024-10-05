@@ -145,7 +145,7 @@ pub(super) struct Dbs {
     pub block_height_to_accepted_bmm_block_hashes:
         Database<SerdeBincode<u32>, SerdeBincode<Vec<Hash256>>>,
     pub current_block_height: Database<SerdeBincode<UnitKey>, SerdeBincode<u32>>,
-    pub current_chain_tip: Database<SerdeBincode<UnitKey>, SerdeBincode<Hash256>>,
+    pub current_chain_tip: Database<SerdeBincode<UnitKey>, SerdeBincode<BlockHash>>,
     pub data_hash_to_sidechain_proposal:
         Database<SerdeBincode<Hash256>, SerdeBincode<SidechainProposal>>,
     pub _leading_by_50: Database<SerdeBincode<UnitKey>, SerdeBincode<Vec<Hash256>>>,

@@ -172,6 +172,14 @@ impl Bip300 {
         Ok(res)
     }
 
+    pub fn get_mainchain_tip(&self) -> Result<BlockHash, miette::Report> {
+        let txn = self.dbs.read_txn().into_diagnostic()?;
+        self.dbs
+            .current_chain_tip
+            .get(&txn, &dbs::UnitKey)
+            .into_diagnostic()
+    }
+
     pub fn get_two_way_peg_data(
         &self,
         start_block: Option<BlockHash>,
@@ -205,16 +213,6 @@ impl Bip300 {
             .into_diagnostic()?
             .unwrap_or(0);
         Ok(height)
-    }
-
-    pub fn get_main_chain_tip(&self) -> Result<[u8; 32]> {
-        let txn = self.env.read_txn().into_diagnostic()?;
-        let block_hash = self
-            .current_chain_tip
-            .get(&txn, &UnitKey)
-            .into_diagnostic()?
-            .unwrap_or([0; 32]);
-        Ok(block_hash)
     }
 
     pub fn get_deposits(&self, sidechain_number: u8) -> Result<Vec<Deposit>> {

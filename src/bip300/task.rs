@@ -843,6 +843,7 @@ fn initial_sync(
                 }
             }
             .try_into()
+            .map(BlockHash::from_byte_array)
             .unwrap()
         };
         dbs.current_chain_tip
@@ -910,6 +911,7 @@ fn task_loop_once(
         let block_hash = hex::decode(block_hash)
             .into_diagnostic()?
             .try_into()
+            .map(BlockHash::from_byte_array)
             .unwrap();
         dbs.current_chain_tip
             .put(&mut txn, &UnitKey, &block_hash)
