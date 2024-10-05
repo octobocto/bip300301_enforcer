@@ -1,7 +1,7 @@
 use std::{future::Future, path::Path, sync::Arc};
 
 use async_broadcast::{broadcast, InactiveReceiver, Receiver};
-use bip300301_messages::bitcoin::BlockHash;
+use bip300301_messages::bitcoin::{self, BlockHash};
 use fallible_iterator::FallibleIterator;
 use futures::FutureExt;
 use miette::IntoDiagnostic;
@@ -10,6 +10,7 @@ use tokio::task::{spawn, JoinHandle};
 
 use crate::{
     cli::Config,
+    rpc_client::{self, RpcClient},
     types::{
         BlockInfo, BmmCommitments, Ctip, Event, Hash256, HeaderInfo, Sidechain, SidechainNumber,
         SidechainProposal, TwoWayPegData,
@@ -20,6 +21,14 @@ mod dbs;
 mod task;
 
 use dbs::{CreateDbsError, Dbs};
+
+#[derive(Debug, Error)]
+pub enum InitError {
+    #[error(transparent)]
+    CreateDbs(#[from] CreateDbsError),
+    #[error(transparent)]
+    GetBlockchainInfo(#[from] rpc_client::GetBlockchainInfoError),
+}
 
 #[derive(Debug, Error)]
 pub enum GetBlockInfoError {
@@ -56,30 +65,32 @@ pub enum TryGetBmmCommitmentsError {
 #[derive(Clone)]
 pub struct Bip300 {
     dbs: Dbs,
+    network: bitcoin::Network,
     events_rx: InactiveReceiver<Event>,
     task: Arc<JoinHandle<()>>,
 }
 
 impl Bip300 {
     pub fn new<F, Fut>(
-        conf: Config,
+        mainchain_client: RpcClient,
+        zmq_addr_sequence: String,
         data_dir: &Path,
         err_handler: F,
-    ) -> Result<Self, CreateDbsError>
+    ) -> Result<Self, InitError>
     where
         F: FnOnce(miette::Report) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send,
     {
         const EVENTS_CHANNEL_CAPACITY: usize = 256;
-        let dbs = Dbs::new(data_dir)?;
-        // FIXME: pass events_tx to task
         let (events_tx, mut events_rx) = broadcast(EVENTS_CHANNEL_CAPACITY);
         events_rx.set_await_active(false);
         events_rx.set_overflow(true);
+        let blockchain_info = rpc_client::get_blockchain_info(&mainchain_client)?;
+        let dbs = Dbs::new(data_dir, blockchain_info.chain)?;
         let task = spawn({
             let dbs = dbs.clone();
             async move {
-                task::task(conf, &dbs, &events_tx)
+                task::task(&mainchain_client, &zmq_addr_sequence, &dbs, &events_tx)
                     .then(|res| async {
                         if let Err(err) = res {
                             err_handler(err).await
@@ -91,8 +102,13 @@ impl Bip300 {
         Ok(Self {
             dbs,
             events_rx: events_rx.deactivate(),
+            network: blockchain_info.chain,
             task: Arc::new(task),
         })
+    }
+
+    pub fn network(&self) -> bitcoin::Network {
+        self.network
     }
 
     pub fn subscribe_events(&self) -> Receiver<Event> {

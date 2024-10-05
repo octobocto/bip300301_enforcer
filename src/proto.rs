@@ -92,6 +92,18 @@ pub mod mainchain {
 
     use crate::types::SidechainNumber;
 
+    impl From<bip300301_messages::bitcoin::Network> for Network {
+        fn from(network: bip300301_messages::bitcoin::Network) -> Self {
+            match network {
+                bip300301_messages::bitcoin::Network::Bitcoin => Network::Mainnet,
+                bip300301_messages::bitcoin::Network::Regtest => Network::Regtest,
+                bip300301_messages::bitcoin::Network::Signet => Network::Signet,
+                bip300301_messages::bitcoin::Network::Testnet => Network::Testnet,
+                _ => Network::Unknown,
+            }
+        }
+    }
+
     impl TryFrom<get_coinbase_psbt_request::ProposeSidechain> for bip300301_messages::CoinbaseMessage {
         type Error = super::Error;
 

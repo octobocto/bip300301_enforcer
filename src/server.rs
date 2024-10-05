@@ -15,7 +15,7 @@ use crate::{
             GetChainTipRequest, GetChainTipResponse, GetCoinbasePsbtRequest,
             GetCoinbasePsbtResponse, GetCtipRequest, GetCtipResponse, GetSidechainProposalsRequest,
             GetSidechainProposalsResponse, GetSidechainsRequest, GetSidechainsResponse,
-            GetTwoWayPegDataRequest, GetTwoWayPegDataResponse, SubscribeEventsRequest,
+            GetTwoWayPegDataRequest, GetTwoWayPegDataResponse, Network, SubscribeEventsRequest,
             SubscribeEventsResponse,
         },
     },
@@ -210,10 +210,14 @@ impl MainchainService for Bip300 {
 
     async fn get_chain_info(
         &self,
-        _request: tonic::Request<GetChainInfoRequest>,
+        request: tonic::Request<GetChainInfoRequest>,
     ) -> Result<tonic::Response<GetChainInfoResponse>, tonic::Status> {
-        // FIXME: implement
-        todo!()
+        let GetChainInfoRequest {} = request.into_inner();
+        let network: Network = self.network().into();
+        let resp = GetChainInfoResponse {
+            network: network as i32,
+        };
+        Ok(tonic::Response::new(resp))
     }
 
     async fn get_chain_tip(

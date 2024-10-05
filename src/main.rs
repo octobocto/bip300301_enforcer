@@ -3,6 +3,7 @@ use std::{net::SocketAddr, path::Path};
 mod bip300;
 mod cli;
 mod proto;
+mod rpc_client;
 mod server;
 mod types;
 mod zmq;
@@ -68,10 +69,16 @@ async fn main() -> Result<()> {
     set_tracing_subscriber(cli.log_level)?;
     let serve_rpc_addr = cli.serve_rpc_addr;
 
+    let mainchain_client = rpc_client::create_client(&cli)?;
     let (err_tx, err_rx) = futures::channel::oneshot::channel();
-    let bip300 = Bip300::new(cli, Path::new("./"), |err| async {
-        let _send_err: Result<(), _> = err_tx.send(err);
-    })
+    let bip300 = Bip300::new(
+        mainchain_client,
+        cli.node_zmq_addr_sequence,
+        Path::new("./"),
+        |err| async {
+            let _send_err: Result<(), _> = err_tx.send(err);
+        },
+    )
     .into_diagnostic()?;
 
     let task = err_rx.map(|err| {

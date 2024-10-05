@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use bip300301_messages::bitcoin::{base58::error, block::Header, hashes::Hash, BlockHash};
+use bip300301_messages::bitcoin::{self, base58::error, block::Header, hashes::Hash, BlockHash};
 use heed::{types::SerdeBincode, EnvOpenOptions, RoTxn};
 use thiserror::Error;
 
@@ -164,8 +164,10 @@ pub(super) struct Dbs {
 impl Dbs {
     const NUM_DBS: u32 = 16;
 
-    pub fn new(data_dir: &Path) -> Result<Self, CreateDbsError> {
-        let db_dir = data_dir.join("./bip300301_enforcer.mdb");
+    pub fn new(data_dir: &Path, network: bitcoin::Network) -> Result<Self, CreateDbsError> {
+        let db_dir = data_dir
+            .join("./bip300301_enforcer")
+            .join(format!("{network}.mdb"));
         if let Err(err) = std::fs::create_dir_all(&db_dir) {
             let err = CreateDbsError::CreateDirectory {
                 path: db_dir,

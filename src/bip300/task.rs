@@ -18,10 +18,11 @@ use miette::{miette, IntoDiagnostic};
 use thiserror::Error;
 use tokio::time::{interval, Instant};
 use tokio_stream::wrappers::IntervalStream;
-use ureq_jsonrpc::{json, Client};
+use ureq_jsonrpc::json;
 
 use crate::{
     cli::Config,
+    rpc_client::RpcClient,
     types::{
         BlockInfo, BmmCommitments, Ctip, Deposit, Event, Hash256, HeaderInfo, PendingM6id,
         Sidechain, SidechainNumber, SidechainProposal, TreasuryUtxo, WithdrawalBundleEvent,
@@ -790,7 +791,7 @@ fn _is_transaction_valid(
 fn initial_sync(
     dbs: &Dbs,
     event_tx: &Sender<Event>,
-    main_client: &Client,
+    main_client: &RpcClient,
 ) -> Result<(), InitialSyncError> {
     let mut rwtxn = dbs.write_txn()?;
     let mut height = dbs
@@ -860,7 +861,7 @@ fn initial_sync(
 fn task_loop_once(
     dbs: &Dbs,
     event_tx: &Sender<Event>,
-    main_client: &Client,
+    main_client: &RpcClient,
 ) -> Result<(), miette::Report> {
     let mut txn = dbs.write_txn().into_diagnostic()?;
     let mut height = dbs
@@ -924,55 +925,13 @@ fn task_loop_once(
     Ok(())
 }
 
-fn create_client(conf: &Config) -> Result<Client, miette::Report> {
-    if conf.node_rpc_user.is_none() != conf.node_rpc_password.is_none() {
-        return Err(miette!("RPC user and password must be set together"));
-    }
-
-    if conf.node_rpc_user.is_none() == conf.node_rpc_cookie_path.is_none() {
-        return Err(miette!("precisely one of RPC user and cookie must be set"));
-    }
-
-    let mut conf_user = conf.node_rpc_user.clone().unwrap_or_default();
-    let mut conf_password = conf.node_rpc_password.clone().unwrap_or_default();
-
-    if conf.node_rpc_cookie_path.is_some() {
-        let cookie_path = conf.node_rpc_cookie_path.clone().unwrap();
-        let auth = std::fs::read_to_string(cookie_path.clone())
-            .map_err(|err| miette!("unable to read bitcoind cookie at {}: {}", cookie_path, err))?;
-
-        let mut auth = auth.split(':');
-
-        conf_user = auth
-            .next()
-            .ok_or(miette!("failed to get rpcuser"))?
-            .to_string()
-            .clone();
-
-        conf_password = auth
-            .next()
-            .ok_or(miette!("failed to get rpcpassword"))?
-            .to_string()
-            .to_string()
-            .clone();
-    }
-
-    Ok(Client {
-        host: conf.node_rpc_host.to_string(),
-        port: conf.node_rpc_port,
-        user: conf_user.to_string(),
-        password: conf_password.to_string(),
-        id: "mainchain".into(),
-    })
-}
-
 pub(super) async fn task(
-    conf: Config,
+    main_client: &RpcClient,
+    zmq_addr_sequence: &str,
     dbs: &Dbs,
     event_tx: &Sender<Event>,
 ) -> Result<(), miette::Report> {
-    let main_client = &create_client(&conf)?;
-    let zmq_sequence = crate::zmq::subscribe_sequence(&conf.node_zmq_addr_sequence)
+    let zmq_sequence = crate::zmq::subscribe_sequence(zmq_addr_sequence)
         .await
         .into_diagnostic()?;
     let () = initial_sync(dbs, event_tx, main_client).into_diagnostic()?;
